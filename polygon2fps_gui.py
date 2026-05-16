@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Polygon Codeforces → FPS 格式转换工具 - 图形界面版（支持批量转换）
+Polygon Codeforces → FPS / Hydro 格式转换工具 - 图形界面版（支持批量转换）
 
 用法:
     python polygon2fps_gui.py
@@ -14,16 +14,17 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 # 导入核心转换模块
-from polygon2fps_core import convert
+from polygon2fps_core import convert as convert_to_fps
+from polygon2hydro_core import convert_to_hydro
 
 
 class Polygon2FPSApp:
-    """Polygon → FPS 转换 GUI 应用程序（支持批量转换）"""
+    """Polygon → FPS / Hydro 转换 GUI 应用程序（支持批量转换）"""
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Polygon → FPS 格式转换工具")
-        self.root.geometry("780x620")
+        self.root.title("Polygon → FPS / Hydro 格式转换工具")
+        self.root.geometry("780x640")
         self.root.minsize(640, 480)
 
         # 设置样式
@@ -33,8 +34,8 @@ class Polygon2FPSApp:
         # 变量
         self.input_files = []           # 待转换文件列表
         self.output_dir = tk.StringVar()
+        self.output_format = tk.StringVar(value='fps')  # 'fps' 或 'hydro'
         self.is_converting = False
-        self.convert_results = []       # 转换结果记录
 
         self._build_ui()
         self._center_window()
@@ -59,12 +60,44 @@ class Polygon2FPSApp:
         # ===== 标题 =====
         title_label = ttk.Label(
             main_frame,
-            text="Polygon Codeforces → FPS 格式转换",
+            text="Polygon Codeforces → FPS / Hydro 格式转换",
             font=('微软雅黑', 14, 'bold'),
         )
         title_label.pack(pady=(0, 12))
 
-        # ===== 输入文件列表 =====
+        # ===== 输出格式选择 =====
+        format_frame = ttk.LabelFrame(main_frame, text="输出格式", padding=8)
+        format_frame.pack(fill=tk.X, pady=(0, 8))
+
+        format_row = ttk.Frame(format_frame)
+        format_row.pack(fill=tk.X)
+
+        ttk.Radiobutton(
+            format_row,
+            text="FPS 格式（.fps.xml）— 兼容 HUSTOJ、HydroOJ 等",
+            variable=self.output_format,
+            value='fps',
+            command=self._on_format_changed,
+        ).pack(anchor=tk.W, pady=(0, 2))
+
+        ttk.Radiobutton(
+            format_row,
+            text="Hydro 格式（.zip）— 兼容 HydroOJ 导入规范",
+            variable=self.output_format,
+            value='hydro',
+            command=self._on_format_changed,
+        ).pack(anchor=tk.W)
+
+    def _on_format_changed(self):
+        """格式切换时的界面调整"""
+        # 更新输出目录提示
+        if self.output_format.get() == 'fps':
+            hint = "输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml"
+        else:
+            hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
+        self.output_hint_label.configure(text=hint)
+
+    # ===== 输入文件列表 =====
         input_frame = ttk.LabelFrame(main_frame, text="输入文件（支持多选）", padding=8)
         input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
@@ -118,8 +151,12 @@ class Polygon2FPSApp:
 
         ttk.Button(output_row, text="浏览...", command=self._browse_output).pack(side=tk.RIGHT)
 
-        ttk.Label(output_frame, text="输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml",
-                  foreground='gray').pack(anchor=tk.W, pady=(4, 0))
+        self.output_hint_label = ttk.Label(
+            output_frame,
+            text="输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml",
+            foreground='gray',
+        )
+        self.output_hint_label.pack(anchor=tk.W, pady=(4, 0))
 
         # ===== 转换按钮 =====
         btn_frame = ttk.Frame(main_frame)
@@ -175,7 +212,7 @@ class Polygon2FPSApp:
         # ===== 底部信息 =====
         footer = ttk.Label(
             main_frame,
-            text="支持 polygon.codeforces.com 导出的题目压缩包 → HUSTOJ/FPS 兼容格式",
+            text="支持 polygon.codeforces.com 导出的题目压缩包 → FPS / Hydro 兼容格式",
             foreground='gray',
             font=('微软雅黑', 8),
         )
@@ -194,7 +231,7 @@ class Polygon2FPSApp:
         count = len(self.input_files)
         self.count_label.configure(text=f"共 {count} 个文件")
         self.clear_btn.configure(state='normal' if count > 0 else 'disabled')
-        self.remove_btn.configure(state='disabled')  # 选中时再启用
+        self.remove_btn.configure(state='disabled')
 
     def _refresh_file_list(self):
         """刷新文件列表显示"""
@@ -239,7 +276,6 @@ class Polygon2FPSApp:
         if added > 0:
             self._refresh_file_list()
             self._log(f'已添加 {added} 个文件', 'info')
-            # 自动设置输出目录为第一个文件的所在目录
             if not self.output_dir.get():
                 self.output_dir.set(os.path.dirname(paths[0]))
 
@@ -268,7 +304,6 @@ class Polygon2FPSApp:
         selected = self.file_listbox.curselection()
         if not selected:
             return
-        # 从后往前删除，避免索引变化
         for idx in reversed(selected):
             self.input_files.pop(idx)
         self._refresh_file_list()
@@ -291,7 +326,6 @@ class Polygon2FPSApp:
 
     def _start_convert(self):
         """开始批量转换"""
-        # 验证
         if not self.input_files:
             messagebox.showwarning("提示", "请先添加要转换的 ZIP 文件")
             return
@@ -305,6 +339,9 @@ class Polygon2FPSApp:
             messagebox.showerror("错误", f"输出目录不存在:\n{out_dir}")
             return
 
+        fmt = self.output_format.get()
+        fmt_name = 'FPS' if fmt == 'fps' else 'Hydro'
+
         # 禁用按钮
         self.convert_btn.configure(state='disabled')
         self.is_converting = True
@@ -316,8 +353,9 @@ class Polygon2FPSApp:
 
         # 记录开始信息
         self._log('=' * 56, 'header')
-        self._log('  Polygon → FPS 批量转换', 'header')
+        self._log(f'  Polygon → {fmt_name} 批量转换', 'header')
         self._log('=' * 56, 'header')
+        self._log(f'输出格式: {fmt_name}', 'info')
         self._log(f'文件总数: {len(self.input_files)}', 'info')
         self._log(f'输出目录: {out_dir}', 'info')
         self._log('-' * 56, 'info')
@@ -325,12 +363,12 @@ class Polygon2FPSApp:
         # 在后台线程中执行批量转换
         thread = threading.Thread(
             target=self._do_batch_convert,
-            args=(list(self.input_files), out_dir),
+            args=(list(self.input_files), out_dir, fmt),
             daemon=True,
         )
         thread.start()
 
-    def _do_batch_convert(self, files: list, out_dir: str):
+    def _do_batch_convert(self, files: list, out_dir: str, fmt: str):
         """执行批量转换（后台线程）"""
         total = len(files)
         success_count = 0
@@ -339,7 +377,6 @@ class Polygon2FPSApp:
         for idx, file_path in enumerate(files):
             file_name = os.path.basename(file_path)
             base_name = os.path.splitext(file_name)[0]
-            out_path = os.path.join(out_dir, f'{base_name}.fps.xml')
 
             # 更新进度
             overall_progress = int((idx / total) * 100)
@@ -347,10 +384,17 @@ class Polygon2FPSApp:
                             f'[{idx + 1}/{total}] 正在转换: {file_name}')
 
             try:
-                convert(file_path, out_path)
+                if fmt == 'fps':
+                    out_path = os.path.join(out_dir, f'{base_name}.fps.xml')
+                    convert_to_fps(file_path, out_path)
+                    self.root.after(0, self._log,
+                                    f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
+                else:  # hydro
+                    convert_to_hydro(file_path, out_dir)
+                    self.root.after(0, self._log,
+                                    f'  ✅ [{idx + 1}/{total}] {file_name} → Hydro 格式', 'success')
+
                 success_count += 1
-                self.root.after(0, self._log,
-                                f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
             except Exception as e:
                 fail_count += 1
                 self.root.after(0, self._log,

@@ -4,6 +4,9 @@ extracted/
 # 生成的 FPS 输出文件
 *.fps.xml
 
+# 生成的 Hydro 输出目录
+hydro_output/
+
 # 原始 polygon zip 文件
 *.zip
 
@@ -18,7 +21,3 @@ __pycache__/
 .idea/
 *.swp
 *.swo
-
-# 系统文件
-Thumbs.db
-.DS_Store
