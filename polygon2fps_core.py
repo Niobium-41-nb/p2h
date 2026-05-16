@@ -10,7 +10,7 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
+from xml.sax.saxutils import escape as xml_escape
 from typing import Optional, List, Tuple
 
 
@@ -116,22 +116,6 @@ def build_description(extract_dir: str, root: ET.Element, lang: str = 'chinese')
     return ''
 
 
-def build_hint(extract_dir: str, lang: str = 'chinese') -> str:
-    """构建提示/题解"""
-    sections_dir = os.path.join(extract_dir, 'statement-sections', lang)
-    tutorial_file = os.path.join(sections_dir, 'tutorial.tex')
-    tutorial_content = get_text_content(tutorial_file)
-    if tutorial_content:
-        return tex_to_plain_text(tutorial_content)
-
-    html_path = os.path.join(extract_dir, 'statements', '.html', lang, 'tutorial.html')
-    html_content = get_text_content(html_path)
-    if html_content:
-        return html_to_plain_text(html_content)
-
-    return ''
-
-
 def get_samples(extract_dir: str, lang: str = 'chinese') -> List[Tuple[str, str]]:
     """获取样例数据"""
     samples = []
@@ -187,39 +171,22 @@ def get_all_tests(extract_dir: str, root: ET.Element) -> List[Tuple[str, str]]:
     return tests
 
 
-def get_solutions(extract_dir: str, root: ET.Element) -> List[Tuple[str, str, str]]:
-    """获取题解代码"""
-    solutions = []
-    solutions_elem = root.find('.//solutions')
-    if solutions_elem is None:
-        return solutions
-
-    for sol in solutions_elem.findall('solution'):
-        tag = sol.get('tag', '')
-        source = sol.find('source')
-        if source is not None:
-            src_path = source.get('path', '')
-            src_type = source.get('type', '')
-            full_path = os.path.join(extract_dir, src_path)
-            code = get_text_content(full_path)
-            if code:
-                solutions.append((tag, src_type, code))
-
-    return solutions
+def _xml_tag(name: str, content: str, indent: int = 1) -> str:
+    """生成 XML 标签（使用 CDATA 包裹内容，避免转义问题）"""
+    pad = '  ' * indent
+    return f'{pad}<{name}><![CDATA[{content}]]></{name}>'
 
 
-def escape_xml(text: str) -> str:
-    """转义 XML 特殊字符"""
-    text = text.replace('&', '&')
-    text = text.replace('<', '<')
-    text = text.replace('>', '>')
-    text = text.replace('"', '"')
-    text = text.replace("'", "'")
-    return text
+def _xml_tag_with_attr(name: str, content: str, attrs: dict, indent: int = 1) -> str:
+    """生成带属性的 XML 标签"""
+    pad = '  ' * indent
+    attr_str = ' '.join(f'{k}="{v}"' for k, v in attrs.items())
+    return f'{pad}<{name} {attr_str}><![CDATA[{content}]]></{name}>'
 
 
 def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
-    """构建 FPS XML 字符串"""
+    """构建 FPS XML 字符串（手动构建，避免转义问题）"""
+    # 基本信息
     names_elem = root.find('names')
     title = ''
     if names_elem is not None:
@@ -241,6 +208,7 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
         if ml is not None and ml.text:
             memory_limit = str(int(ml.text) // 1048576)
 
+    # 描述
     description = build_description(extract_dir, root, 'chinese')
     input_desc = ''
     output_desc = ''
@@ -253,6 +221,7 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
     if output_tex:
         output_desc = tex_to_plain_text(output_tex)
 
+    # 样例
     samples = get_samples(extract_dir, 'chinese')
     if not samples:
         tests_elem = testset.find('tests') if testset is not None else None
@@ -264,63 +233,58 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
                     out = get_text_content(os.path.join(tests_dir, f'{i:02d}.a')).strip()
                     if inp and out:
                         samples.append((inp, out))
+
+    # 所有测试数据
     all_tests = get_all_tests(extract_dir, root)
 
-    fps = ET.Element('fps', {
-        'version': '1.2',
-        'url': 'https://github.com/zhblue/freeproblemset',
-    })
+    # 来源
+    short_name = root.get('short-name', '')
 
-    generator = ET.SubElement(fps, 'generator')
-    generator.set('name', 'polygon2fps')
-    generator.set('url', 'https://github.com/your-username/polygon2fps')
+    # ===== 手动构建 XML =====
+    lines = []
+    lines.append('<?xml version="1.0" encoding="utf-8"?>')
+    lines.append('<fps version="1.2" url="https://github.com/zhblue/freeproblemset">')
+    lines.append('  <generator name="polygon2fps" url="https://github.com/your-username/polygon2fps"/>')
+    lines.append('  <item>')
 
-    item = ET.SubElement(fps, 'item')
+    # 标题
+    lines.append(f'    <title>{xml_escape(title)}</title>')
 
-    title_elem = ET.SubElement(item, 'title')
-    title_elem.text = escape_xml(title)
+    # 时间限制
+    lines.append(f'    <time_limit unit="s">{xml_escape(time_limit)}</time_limit>')
 
-    tl_elem = ET.SubElement(item, 'time_limit')
-    tl_elem.text = escape_xml(time_limit)
-    tl_elem.set('unit', 's')
+    # 内存限制
+    lines.append(f'    <memory_limit unit="MB">{xml_escape(memory_limit)}</memory_limit>')
 
-    ml_elem = ET.SubElement(item, 'memory_limit')
-    ml_elem.text = escape_xml(memory_limit)
-    ml_elem.set('unit', 'MB')
+    # 描述（使用 CDATA）
+    lines.append(f'    <description><![CDATA[{description}]]></description>')
 
-    desc_elem = ET.SubElement(item, 'description')
-    desc_elem.text = escape_xml(description)
+    # 输入格式
+    lines.append(f'    <input><![CDATA[{input_desc}]]></input>')
 
-    input_elem = ET.SubElement(item, 'input')
-    input_elem.text = escape_xml(input_desc)
+    # 输出格式
+    lines.append(f'    <output><![CDATA[{output_desc}]]></output>')
 
-    output_elem = ET.SubElement(item, 'output')
-    output_elem.text = escape_xml(output_desc)
-
+    # 样例
     for sample_in, sample_out in samples:
-        si = ET.SubElement(item, 'sample_input')
-        si.text = escape_xml(sample_in)
-        so = ET.SubElement(item, 'sample_output')
-        so.text = escape_xml(sample_out)
+        lines.append(f'    <sample_input><![CDATA[{sample_in}]]></sample_input>')
+        lines.append(f'    <sample_output><![CDATA[{sample_out}]]></sample_output>')
 
+    # 测试数据（排除样例）
     sample_set = set(samples)
     for test_in, test_out in all_tests:
         if (test_in, test_out) in sample_set:
             continue
-        ti = ET.SubElement(item, 'test_input')
-        ti.text = escape_xml(test_in)
-        to = ET.SubElement(item, 'test_output')
-        to.text = escape_xml(test_out)
+        lines.append(f'    <test_input><![CDATA[{test_in}]]></test_input>')
+        lines.append(f'    <test_output><![CDATA[{test_out}]]></test_output>')
 
-    source_elem = ET.SubElement(item, 'source')
-    short_name = root.get('short-name', '')
-    source_elem.text = escape_xml(f'Polygon: {short_name}')
+    # 来源
+    lines.append(f'    <source>{xml_escape(f"Polygon: {short_name}")}</source>')
 
-    rough_string = ET.tostring(fps, encoding='utf-8', method='xml')
-    reparsed = minidom.parseString(rough_string)
-    pretty_xml = reparsed.toprettyxml(indent='  ', encoding='utf-8')
+    lines.append('  </item>')
+    lines.append('</fps>')
 
-    return pretty_xml.decode('utf-8')
+    return '\n'.join(lines)
 
 
 def convert(polygon_zip: str, output_fps: Optional[str] = None,
