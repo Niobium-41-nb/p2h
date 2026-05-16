@@ -253,8 +253,6 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
     if output_tex:
         output_desc = tex_to_plain_text(output_tex)
 
-    hint = build_hint(extract_dir, 'chinese')
-
     samples = get_samples(extract_dir, 'chinese')
     if not samples:
         tests_elem = testset.find('tests') if testset is not None else None
@@ -266,9 +264,7 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
                     out = get_text_content(os.path.join(tests_dir, f'{i:02d}.a')).strip()
                     if inp and out:
                         samples.append((inp, out))
-
     all_tests = get_all_tests(extract_dir, root)
-    solutions = get_solutions(extract_dir, root)
 
     fps = ET.Element('fps', {
         'version': '1.2',
@@ -316,19 +312,9 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
         to = ET.SubElement(item, 'test_output')
         to.text = escape_xml(test_out)
 
-    if hint:
-        hint_elem = ET.SubElement(item, 'hint')
-        hint_elem.text = escape_xml(hint)
-
     source_elem = ET.SubElement(item, 'source')
     short_name = root.get('short-name', '')
     source_elem.text = escape_xml(f'Polygon: {short_name}')
-
-    for tag, src_type, code in solutions:
-        sol_elem = ET.SubElement(item, 'solution')
-        sol_elem.set('tag', tag)
-        sol_elem.set('type', src_type)
-        sol_elem.text = escape_xml(code)
 
     rough_string = ET.tostring(fps, encoding='utf-8', method='xml')
     reparsed = minidom.parseString(rough_string)
