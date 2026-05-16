@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Polygon Codeforces → FPS 格式转换工具 - 图形界面版
+Polygon Codeforces → FPS 格式转换工具 - 图形界面版（支持批量转换）
 
 用法:
     python polygon2fps_gui.py
@@ -18,23 +18,23 @@ from polygon2fps_core import convert
 
 
 class Polygon2FPSApp:
-    """Polygon → FPS 转换 GUI 应用程序"""
+    """Polygon → FPS 转换 GUI 应用程序（支持批量转换）"""
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Polygon → FPS 格式转换工具")
-        self.root.geometry("720x540")
-        self.root.minsize(600, 450)
+        self.root.geometry("780x620")
+        self.root.minsize(640, 480)
 
         # 设置样式
         self.style = ttk.Style()
         self.style.theme_use('vista' if 'vista' in self.style.theme_names() else 'clam')
 
         # 变量
-        self.input_path = tk.StringVar()
-        self.output_path = tk.StringVar()
-        self.auto_output = tk.BooleanVar(value=True)
+        self.input_files = []           # 待转换文件列表
+        self.output_dir = tk.StringVar()
         self.is_converting = False
+        self.convert_results = []       # 转换结果记录
 
         self._build_ui()
         self._center_window()
@@ -62,52 +62,68 @@ class Polygon2FPSApp:
             text="Polygon Codeforces → FPS 格式转换",
             font=('微软雅黑', 14, 'bold'),
         )
-        title_label.pack(pady=(0, 16))
+        title_label.pack(pady=(0, 12))
 
-        # ===== 输入文件选择 =====
-        input_frame = ttk.LabelFrame(main_frame, text="输入文件", padding=8)
-        input_frame.pack(fill=tk.X, pady=(0, 8))
+        # ===== 输入文件列表 =====
+        input_frame = ttk.LabelFrame(main_frame, text="输入文件（支持多选）", padding=8)
+        input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
-        input_row = ttk.Frame(input_frame)
-        input_row.pack(fill=tk.X)
+        # 按钮行
+        btn_row = ttk.Frame(input_frame)
+        btn_row.pack(fill=tk.X, pady=(0, 4))
 
-        self.input_entry = ttk.Entry(input_row, textvariable=self.input_path, state='readonly')
-        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(btn_row, text="添加文件...", command=self._browse_input).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_row, text="添加文件夹...", command=self._browse_folder).pack(side=tk.LEFT, padx=(0, 4))
+        self.remove_btn = ttk.Button(btn_row, text="移除选中", command=self._remove_selected, state='disabled')
+        self.remove_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self.clear_btn = ttk.Button(btn_row, text="清空列表", command=self._clear_list, state='disabled')
+        self.clear_btn.pack(side=tk.LEFT)
 
-        ttk.Button(input_row, text="浏览...", command=self._browse_input).pack(side=tk.RIGHT)
+        # 文件列表（带滚动条）
+        list_frame = ttk.Frame(input_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(input_frame, text="选择 polygon.codeforces 格式的 .zip 文件",
-                  foreground='gray').pack(anchor=tk.W, pady=(4, 0))
+        self.file_listbox = tk.Listbox(
+            list_frame,
+            selectmode=tk.EXTENDED,
+            font=('Consolas', 10),
+            bg='#1e1e1e',
+            fg='#d4d4d4',
+            selectbackground='#264f78',
+            selectforeground='#ffffff',
+            relief=tk.FLAT,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.file_listbox.bind('<<ListboxSelect>>', self._on_selection_changed)
 
-        # ===== 输出文件选择 =====
-        output_frame = ttk.LabelFrame(main_frame, text="输出文件", padding=8)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.file_listbox.configure(yscrollcommand=scrollbar.set)
+
+        # 文件数量标签
+        self.count_label = ttk.Label(input_frame, text="共 0 个文件", foreground='gray')
+        self.count_label.pack(anchor=tk.W, pady=(2, 0))
+
+        # ===== 输出目录选择 =====
+        output_frame = ttk.LabelFrame(main_frame, text="输出目录", padding=8)
         output_frame.pack(fill=tk.X, pady=(0, 8))
 
-        # 自动输出
-        auto_frame = ttk.Frame(output_frame)
-        auto_frame.pack(fill=tk.X, pady=(0, 4))
-        ttk.Checkbutton(
-            auto_frame,
-            text="自动生成输出文件名（与输入文件同名，后缀 .fps.xml）",
-            variable=self.auto_output,
-            command=self._toggle_output_entry,
-        ).pack(anchor=tk.W)
-
-        # 手动输出
         output_row = ttk.Frame(output_frame)
         output_row.pack(fill=tk.X)
 
-        self.output_entry = ttk.Entry(output_row, textvariable=self.output_path, state='disabled')
+        self.output_entry = ttk.Entry(output_row, textvariable=self.output_dir, state='readonly')
         self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
-        self.output_browse_btn = ttk.Button(
-            output_row, text="浏览...", command=self._browse_output, state='disabled'
-        )
-        self.output_browse_btn.pack(side=tk.RIGHT)
+        ttk.Button(output_row, text="浏览...", command=self._browse_output).pack(side=tk.RIGHT)
+
+        ttk.Label(output_frame, text="输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml",
+                  foreground='gray').pack(anchor=tk.W, pady=(4, 0))
 
         # ===== 转换按钮 =====
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=(8, 8))
+        btn_frame.pack(fill=tk.X, pady=(4, 8))
 
         self.convert_btn = ttk.Button(
             btn_frame,
@@ -125,7 +141,7 @@ class Polygon2FPSApp:
 
         # ===== 进度条 =====
         progress_frame = ttk.Frame(main_frame)
-        progress_frame.pack(fill=tk.X, pady=(0, 8))
+        progress_frame.pack(fill=tk.X, pady=(0, 4))
 
         self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
         self.progress_bar.pack(fill=tk.X)
@@ -145,7 +161,7 @@ class Polygon2FPSApp:
             fg='#d4d4d4',
             insertbackground='white',
             state='disabled',
-            height=12,
+            height=10,
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -154,6 +170,7 @@ class Polygon2FPSApp:
         self.log_text.tag_config('success', foreground='#4ec9b0')
         self.log_text.tag_config('error', foreground='#f44747')
         self.log_text.tag_config('warn', foreground='#dcdcaa')
+        self.log_text.tag_config('header', foreground='#569cd6', font=('Consolas', 9, 'bold'))
 
         # ===== 底部信息 =====
         footer = ttk.Label(
@@ -162,7 +179,7 @@ class Polygon2FPSApp:
             foreground='gray',
             font=('微软雅黑', 8),
         )
-        footer.pack(pady=(4, 0))
+        footer.pack(pady=(2, 0))
 
     def _log(self, message: str, tag: str = 'info'):
         """向日志区域添加消息"""
@@ -172,97 +189,121 @@ class Polygon2FPSApp:
         self.log_text.configure(state='disabled')
         self.root.update_idletasks()
 
+    def _update_file_count(self):
+        """更新文件数量显示"""
+        count = len(self.input_files)
+        self.count_label.configure(text=f"共 {count} 个文件")
+        self.clear_btn.configure(state='normal' if count > 0 else 'disabled')
+        self.remove_btn.configure(state='disabled')  # 选中时再启用
+
+    def _refresh_file_list(self):
+        """刷新文件列表显示"""
+        self.file_listbox.delete(0, tk.END)
+        for i, f in enumerate(self.input_files, start=1):
+            name = os.path.basename(f)
+            size = os.path.getsize(f)
+            size_str = self._format_size(size)
+            self.file_listbox.insert(tk.END, f"  {i:3d}. {name}  ({size_str})")
+        self._update_file_count()
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        """格式化文件大小"""
+        if size_bytes < 1024:
+            return f'{size_bytes} B'
+        elif size_bytes < 1024 * 1024:
+            return f'{size_bytes / 1024:.1f} KB'
+        else:
+            return f'{size_bytes / 1024 / 1024:.1f} MB'
+
+    def _on_selection_changed(self, event):
+        """列表选中状态变化"""
+        selected = self.file_listbox.curselection()
+        self.remove_btn.configure(state='normal' if selected else 'disabled')
+
     def _browse_input(self):
-        """浏览输入文件"""
-        path = filedialog.askopenfilename(
-            title="选择 Polygon 格式的 ZIP 文件",
+        """浏览添加多个输入文件"""
+        paths = filedialog.askopenfilenames(
+            title="选择 Polygon 格式的 ZIP 文件（可多选）",
             filetypes=[("ZIP 文件", "*.zip"), ("所有文件", "*.*")],
         )
-        if path:
-            self.input_path.set(path)
-            # 自动生成输出路径
-            if self.auto_output.get():
-                base = os.path.splitext(os.path.basename(path))[0]
-                out_dir = os.path.dirname(path)
-                self.output_path.set(os.path.join(out_dir, f'{base}.fps.xml'))
+        if not paths:
+            return
+
+        added = 0
+        for path in paths:
+            if path not in self.input_files:
+                self.input_files.append(path)
+                added += 1
+
+        if added > 0:
+            self._refresh_file_list()
+            self._log(f'已添加 {added} 个文件', 'info')
+            # 自动设置输出目录为第一个文件的所在目录
+            if not self.output_dir.get():
+                self.output_dir.set(os.path.dirname(paths[0]))
+
+    def _browse_folder(self):
+        """浏览文件夹，添加其中所有 zip 文件"""
+        folder = filedialog.askdirectory(title="选择包含 Polygon ZIP 文件的文件夹")
+        if not folder:
+            return
+
+        added = 0
+        for f in sorted(os.listdir(folder)):
+            if f.lower().endswith('.zip'):
+                full_path = os.path.join(folder, f)
+                if full_path not in self.input_files:
+                    self.input_files.append(full_path)
+                    added += 1
+
+        if added > 0:
+            self._refresh_file_list()
+            self._log(f'从文件夹添加了 {added} 个 ZIP 文件', 'info')
+            if not self.output_dir.get():
+                self.output_dir.set(folder)
+
+    def _remove_selected(self):
+        """移除选中的文件"""
+        selected = self.file_listbox.curselection()
+        if not selected:
+            return
+        # 从后往前删除，避免索引变化
+        for idx in reversed(selected):
+            self.input_files.pop(idx)
+        self._refresh_file_list()
+        self._log(f'已移除 {len(selected)} 个文件', 'info')
+
+    def _clear_list(self):
+        """清空文件列表"""
+        if not self.input_files:
+            return
+        if messagebox.askyesno("确认", f"确定要清空文件列表（共 {len(self.input_files)} 个文件）吗？"):
+            self.input_files.clear()
+            self._refresh_file_list()
+            self._log('已清空文件列表', 'info')
 
     def _browse_output(self):
-        """浏览输出文件"""
-        path = filedialog.asksaveasfilename(
-            title="保存 FPS XML 文件",
-            defaultextension=".xml",
-            filetypes=[("XML 文件", "*.xml"), ("所有文件", "*.*")],
-        )
+        """浏览输出目录"""
+        path = filedialog.askdirectory(title="选择输出目录")
         if path:
-            self.output_path.set(path)
-
-    def _toggle_output_entry(self):
-        """切换输出文件输入框状态"""
-        if self.auto_output.get():
-            self.output_entry.configure(state='disabled')
-            self.output_browse_btn.configure(state='disabled')
-            # 自动生成
-            inp = self.input_path.get()
-            if inp:
-                base = os.path.splitext(os.path.basename(inp))[0]
-                out_dir = os.path.dirname(inp)
-                self.output_path.set(os.path.join(out_dir, f'{base}.fps.xml'))
-        else:
-            self.output_entry.configure(state='normal')
-            self.output_browse_btn.configure(state='normal')
-
-    def _progress_callback(self, progress: int, message: str):
-        """进度回调函数"""
-        self.root.after(0, self._update_progress, progress, message)
-
-    def _update_progress(self, progress: int, message: str):
-        """更新进度显示（在主线程中执行）"""
-        if progress < 0:
-            # 错误
-            self.progress_bar['value'] = 0
-            self.status_label.configure(text=message, foreground='#f44747')
-            self._log(f'❌ {message}', 'error')
-            self.convert_btn.configure(state='normal')
-            self.is_converting = False
-        elif progress >= 100:
-            # 完成
-            self.progress_bar['value'] = 100
-            self.status_label.configure(text=message, foreground='#4ec9b0')
-            self._log(f'✅ {message}', 'success')
-            self.convert_btn.configure(state='normal')
-            self.is_converting = False
-        else:
-            self.progress_bar['value'] = progress
-            self.status_label.configure(text=message, foreground='#d4d4d4')
-            self._log(f'▶ {message}', 'info')
+            self.output_dir.set(path)
 
     def _start_convert(self):
-        """开始转换"""
-        # 验证输入
-        inp = self.input_path.get()
-        if not inp:
-            messagebox.showwarning("提示", "请先选择输入的 ZIP 文件")
+        """开始批量转换"""
+        # 验证
+        if not self.input_files:
+            messagebox.showwarning("提示", "请先添加要转换的 ZIP 文件")
             return
 
-        if not os.path.isfile(inp):
-            messagebox.showerror("错误", f"输入文件不存在:\n{inp}")
+        out_dir = self.output_dir.get()
+        if not out_dir:
+            messagebox.showwarning("提示", "请选择输出目录")
             return
 
-        if not inp.lower().endswith('.zip'):
-            if not messagebox.askyesno("确认", "选择的文件不是 .zip 格式，确定继续吗？"):
-                return
-
-        # 确定输出路径
-        if self.auto_output.get():
-            base = os.path.splitext(os.path.basename(inp))[0]
-            out_dir = os.path.dirname(inp)
-            out_path = os.path.join(out_dir, f'{base}.fps.xml')
-            self.output_path.set(out_path)
-        else:
-            out_path = self.output_path.get()
-            if not out_path:
-                messagebox.showwarning("提示", "请指定输出文件路径")
-                return
+        if not os.path.isdir(out_dir):
+            messagebox.showerror("错误", f"输出目录不存在:\n{out_dir}")
+            return
 
         # 禁用按钮
         self.convert_btn.configure(state='disabled')
@@ -274,27 +315,76 @@ class Polygon2FPSApp:
         self.log_text.configure(state='disabled')
 
         # 记录开始信息
-        self._log('=' * 50, 'info')
-        self._log('Polygon → FPS 格式转换', 'info')
-        self._log('=' * 50, 'info')
-        self._log(f'输入文件: {inp}', 'info')
-        self._log(f'输出文件: {out_path}', 'info')
-        self._log('-' * 50, 'info')
+        self._log('=' * 56, 'header')
+        self._log('  Polygon → FPS 批量转换', 'header')
+        self._log('=' * 56, 'header')
+        self._log(f'文件总数: {len(self.input_files)}', 'info')
+        self._log(f'输出目录: {out_dir}', 'info')
+        self._log('-' * 56, 'info')
 
-        # 在后台线程中执行转换
+        # 在后台线程中执行批量转换
         thread = threading.Thread(
-            target=self._do_convert,
-            args=(inp, out_path),
+            target=self._do_batch_convert,
+            args=(list(self.input_files), out_dir),
             daemon=True,
         )
         thread.start()
 
-    def _do_convert(self, inp: str, out_path: str):
-        """执行转换（后台线程）"""
-        try:
-            convert(inp, out_path, progress_callback=self._progress_callback)
-        except Exception as e:
-            self._progress_callback(-1, f'{e}')
+    def _do_batch_convert(self, files: list, out_dir: str):
+        """执行批量转换（后台线程）"""
+        total = len(files)
+        success_count = 0
+        fail_count = 0
+
+        for idx, file_path in enumerate(files):
+            file_name = os.path.basename(file_path)
+            base_name = os.path.splitext(file_name)[0]
+            out_path = os.path.join(out_dir, f'{base_name}.fps.xml')
+
+            # 更新进度
+            overall_progress = int((idx / total) * 100)
+            self.root.after(0, self._update_progress, overall_progress,
+                            f'[{idx + 1}/{total}] 正在转换: {file_name}')
+
+            try:
+                convert(file_path, out_path)
+                success_count += 1
+                self.root.after(0, self._log,
+                                f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
+            except Exception as e:
+                fail_count += 1
+                self.root.after(0, self._log,
+                                f'  ❌ [{idx + 1}/{total}] {file_name} - 失败: {e}', 'error')
+
+        # 完成
+        self.root.after(0, self._on_batch_complete, total, success_count, fail_count)
+
+    def _on_batch_complete(self, total: int, success: int, fail: int):
+        """批量转换完成"""
+        self._log('-' * 56, 'info')
+        if fail == 0:
+            self._log(f'✅ 全部完成！共 {total} 个文件，全部转换成功', 'success')
+            self.progress_bar['value'] = 100
+            self.status_label.configure(
+                text=f'转换完成！成功: {success}，失败: {fail}',
+                foreground='#4ec9b0',
+            )
+        else:
+            self._log(f'⚠️ 转换完成。成功: {success}，失败: {fail}', 'warn')
+            self.progress_bar['value'] = 100
+            self.status_label.configure(
+                text=f'转换完成（部分失败）。成功: {success}，失败: {fail}',
+                foreground='#dcdcaa',
+            )
+
+        self.convert_btn.configure(state='normal')
+        self.is_converting = False
+
+    def _update_progress(self, progress: int, message: str):
+        """更新进度显示（在主线程中执行）"""
+        self.progress_bar['value'] = progress
+        self.status_label.configure(text=message, foreground='#d4d4d4')
+        self._log(f'▶ {message}', 'info')
 
     def run(self):
         """运行应用"""
