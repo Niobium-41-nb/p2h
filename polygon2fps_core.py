@@ -39,22 +39,216 @@ def get_text_content(file_path: str) -> str:
 def tex_to_plain_text(tex_content: str) -> str:
     """将 LaTeX 内容转换为纯文本"""
     text = tex_content
+
+    # 1. 移除注释
     text = re.sub(r'(?<!\\)%.*', '', text)
-    text = text.replace('\\ldots', '...')
-    text = text.replace('\\mid', '|')
-    text = text.replace('\\&', '&')
-    text = text.replace('\\cdot', '·')
-    text = text.replace('\\le', '≤')
-    text = text.replace('\\ge', '≥')
-    text = text.replace('\\lt', '<')
-    text = text.replace('\\gt', '>')
-    text = text.replace('\\times', '×')
+
+    # 2. 处理 \begin{xxx} 和 \end{xxx} 环境标记
+    text = re.sub(r'\\begin\{[^}]*\}', '', text)
+    text = re.sub(r'\\end\{[^}]*\}', '', text)
+
+    # 3. 处理 \item (列表项)
+    text = re.sub(r'\\item\s*', '- ', text)
+
+    # 4. 处理 \left, \right (通常可以移除，但要保留后面的内容)
+    text = re.sub(r'\\left\b\s*', '', text)
+    text = re.sub(r'\\right\b\s*', '', text)
+
+    # 5. 移除 \displaystyle, \limits 等格式命令
+    text = re.sub(r'\\displaystyle\s*', '', text)
+    text = re.sub(r'\\limits\s*', '', text)
+
+    # 6. 数学符号替换（完整命令优先，避免部分匹配）
+    replacements = [
+        # 箭头
+        ('\\Longleftarrow', '⇐'),
+        ('\\Longrightarrow', '⇒'),
+        ('\\Longleftrightarrow', '↔'),
+        ('\\longleftarrow', '←'),
+        ('\\longrightarrow', '→'),
+        ('\\leftarrow', '←'),
+        ('\\rightarrow', '→'),
+        ('\\Leftarrow', '⇐'),
+        ('\\Rightarrow', '⇒'),
+        ('\\leftrightarrow', '↔'),
+        ('\\uparrow', '↑'),
+        ('\\downarrow', '↓'),
+        ('\\updownarrow', '↕'),
+        ('\\Uparrow', '⇑'),
+        ('\\Downarrow', '⇓'),
+        ('\\Updownarrow', '⇕'),
+        ('\\mapsto', '↦'),
+        ('\\longmapsto', '⟼'),
+        ('\\nearrow', '↗'),
+        ('\\searrow', '↘'),
+        ('\\swarrow', '↙'),
+        ('\\nwarrow', '↖'),
+        ('\\to', '→'),
+        ('\\gets', '←'),
+        # 关系符号
+        ('\\le', '≤'),
+        ('\\ge', '≥'),
+        ('\\leqslant', '≤'),
+        ('\\geqslant', '≥'),
+        ('\\ll', '≪'),
+        ('\\gg', '≫'),
+        ('\\neq', '≠'),  # 必须放在 \ne 之前，避免 \neq 被 \ne 部分匹配
+        ('\\ne', '≠'),
+        ('\\equiv', '≡'),
+        ('\\approx', '≈'),
+        ('\\approxeq', '≊'),
+        ('\\cong', '≅'),
+        ('\\simeq', '≃'),
+        ('\\sim', '∼'),
+        ('\\doteq', '≐'),
+        ('\\propto', '∝'),
+        ('\\models', '⊨'),
+        ('\\mid', '|'),
+        ('\\parallel', '∥'),
+        ('\\perp', '⊥'),
+        ('\\lt', '<'),
+        ('\\gt', '>'),
+        # 集合符号
+        ('\\in', '∈'),
+        ('\\notin', '∉'),
+        ('\\ni', '∋'),
+        ('\\subset', '⊂'),
+        ('\\supset', '⊃'),
+        ('\\subseteq', '⊆'),
+        ('\\supseteq', '⊇'),
+        ('\\subsetneq', '⊊'),
+        ('\\supsetneq', '⊋'),
+        ('\\cup', '∪'),
+        ('\\cap', '∩'),
+        ('\\setminus', '∖'),
+        ('\\emptyset', '∅'),
+        ('\\varnothing', '∅'),
+        # 运算符
+        ('\\times', '×'),
+        ('\\div', '÷'),
+        ('\\pm', '±'),
+        ('\\mp', '∓'),
+        ('\\cdot', '·'),
+        ('\\ast', '*'),
+        ('\\star', '★'),
+        ('\\circ', '°'),
+        ('\\bullet', '•'),
+        ('\\oplus', '⊕'),
+        ('\\ominus', '⊖'),
+        ('\\otimes', '⊗'),
+        ('\\oslash', '⊘'),
+        ('\\odot', '⊙'),
+        ('\\dagger', '†'),
+        ('\\ddagger', '‡'),
+        # 逻辑符号
+        ('\\forall', '∀'),
+        ('\\exists', '∃'),
+        ('\\nexists', '∄'),
+        ('\\land', '∧'),
+        ('\\lor', '∨'),
+        ('\\lnot', '¬'),
+        ('\\top', '⊤'),
+        ('\\bot', '⊥'),
+        ('\\vdash', '⊢'),
+        ('\\vDash', '⊨'),
+        # 其他符号
+        ('\\ldots', '...'),
+        ('\\dots', '...'),
+        ('\\cdots', '...'),
+        ('\\vdots', '⋮'),
+        ('\\ddots', '⋱'),
+        ('\\infty', '∞'),
+        ('\\partial', '∂'),
+        ('\\nabla', '∇'),
+        ('\\prime', '′'),
+        ('\\degree', '°'),
+        ('\\angle', '∠'),
+        ('\\triangle', '△'),
+        ('\\surd', '√'),
+        ('\\imath', 'i'),
+        ('\\jmath', 'j'),
+        ('\\ell', 'ℓ'),
+        ('\\hbar', 'ħ'),
+        ('\\lfloor', '⌊'),
+        ('\\rfloor', '⌋'),
+        ('\\lceil', '⌈'),
+        ('\\rceil', '⌉'),
+        ('\\&', '&'),
+        ('\\_', '_'),
+        ('\\%', '%'),
+        ('\\$', '$'),
+        ('\\#', '#'),
+        ('\\P', '¶'),
+        ('\\S', '§'),
+    ]
+    for cmd, repl in replacements:
+        text = text.replace(cmd, repl)
+
+    # 7. 函数名（需要保留为文本）
+    # 注意: 使用 (?![a-zA-Z]) 替代 \b，因为 _ 是 \w 的一部分
+    func_names = [
+        'max', 'min', 'sum', 'prod', 'log', 'ln', 'lg', 'sin', 'cos',
+        'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan',
+        'sinh', 'cosh', 'tanh', 'det', 'dim', 'hom', 'ker', 'exp',
+        'gcd', 'lcm', 'mod', 'bmod', 'pmod', 'arg', 'deg',
+    ]
+    for name in func_names:
+        text = re.sub(rf'\\{name}(?![a-zA-Z])', name, text)
+
+    # 8. 处理 \text{...}, \textbf{...}, \textit{...}, \texttt{...}
     text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
     text = re.sub(r'\\textbf\{([^}]*)\}', r'\1', text)
     text = re.sub(r'\\textit\{([^}]*)\}', r'\1', text)
     text = re.sub(r'\\texttt\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\$\$\$', '$', text)
+    text = re.sub(r'\\mathrm\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathit\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathbf\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathsf\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathtt\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathcal\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathbb\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\mathfrak\{([^}]*)\}', r'\1', text)
+
+    # 9. 处理上标和下标
+    text = re.sub(r'\^\{(.+?)\}', r'^{\1}', text)
+    text = re.sub(r'\_\{(.+?)\}', r'_{\1}', text)
+
+    # 10. 处理 \frac{a}{b} → a/b
+    text = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'\1/\2', text)
+
+    # 11. 处理 \sqrt, \sqrt[n]{...}
+    text = re.sub(r'\\sqrt(?:\[([^\]]*)\])?\{([^}]*)\}', r'sqrt(\2)', text)
+
+    # 12. 处理 \binom{n}{k}
+    text = re.sub(r'\\binom\{([^}]*)\}\{([^}]*)\}', r'C(\1,\2)', text)
+
+    # 13. 处理 \underline, \overline, \overbrace, \underbrace
+    text = re.sub(r'\\underline\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\overline\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\overbrace\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\underbrace\{([^}]*)\}', r'\1', text)
+
+    # 14. 处理 \operatorname{name}
+    text = re.sub(r'\\operatorname\{([^}]*)\}', r'\1', text)
+
+    # 15. 处理 \mbox{...}
+    text = re.sub(r'\\mbox\{([^}]*)\}', r'\1', text)
+
+    # 16. 移除剩余的 \xxx 命令（未知命令）
+    text = re.sub(r'\\[a-zA-Z]+(?![a-zA-Z])', '', text)
+
+    # 17. 处理 { 和 } 括号（数学模式中的分组括号）
+    text = text.replace('{', '')
+    text = text.replace('}', '')
+
+    # 18. 处理 $$...$$ 和 $...$ 数学模式标记
+    text = re.sub(r'\$\$\$(.+?)\$\$\$', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'\$\$(.+?)\$\$', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'\$(.+?)\$', r'\1', text, flags=re.DOTALL)
+
+    # 19. 合并多余空行
     text = re.sub(r'\n\s*\n', '\n\n', text)
+
     text = text.strip()
     return text
 
