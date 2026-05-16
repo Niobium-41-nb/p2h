@@ -242,21 +242,21 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
 
     # ===== 手动构建 XML =====
     lines = []
-    lines.append('<?xml version="1.0" encoding="utf-8"?>')
+    lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append('<fps version="1.2" url="https://github.com/zhblue/freeproblemset">')
     lines.append('  <generator name="polygon2fps" url="https://github.com/your-username/polygon2fps"/>')
     lines.append('  <item>')
 
     # 标题
-    lines.append(f'    <title>{xml_escape(title)}</title>')
+    lines.append(f'    <title><![CDATA[{title}]]></title>')
 
     # 时间限制
-    lines.append(f'    <time_limit unit="s">{xml_escape(time_limit)}</time_limit>')
+    lines.append(f'    <time_limit unit="s"><![CDATA[{time_limit}]]></time_limit>')
 
     # 内存限制
-    lines.append(f'    <memory_limit unit="MB">{xml_escape(memory_limit)}</memory_limit>')
+    lines.append(f'    <memory_limit unit="MB"><![CDATA[{memory_limit}]]></memory_limit>')
 
-    # 描述（使用 CDATA）
+    # 描述
     lines.append(f'    <description><![CDATA[{description}]]></description>')
 
     # 输入格式
@@ -278,8 +278,11 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
         lines.append(f'    <test_input><![CDATA[{test_in}]]></test_input>')
         lines.append(f'    <test_output><![CDATA[{test_out}]]></test_output>')
 
+    # 提示（某些 OJ 要求此标签存在）
+    lines.append('    <hint><![CDATA[]]></hint>')
+
     # 来源
-    lines.append(f'    <source>{xml_escape(f"Polygon: {short_name}")}</source>')
+    lines.append(f'    <source><![CDATA[Polygon: {short_name}]]></source>')
 
     lines.append('  </item>')
     lines.append('</fps>')
