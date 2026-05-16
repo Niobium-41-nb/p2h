@@ -1,8 +1,0 @@
-=== NAMES ===
-chinese = 塔菲大战哥布林
-english = Taffy vs Goblins
-short-name: binersearchwsx
-=== TESTS ===
-exists: True
-count: 44
-first 10: ['01', '01.a', '02', '02.a', '03', '03.a', '04', '04.a', '05', '05.a']
