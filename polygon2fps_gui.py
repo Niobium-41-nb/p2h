@@ -88,18 +88,7 @@ class Polygon2FPSApp:
             command=self._on_format_changed,
         ).pack(anchor=tk.W)
 
-    def _on_format_changed(self):
-        """格式切换时的界面调整"""
-        # 更新输出目录提示（UI 尚未构建完成时跳过）
-        if not hasattr(self, 'output_hint_label'):
-            return
-        if self.output_format.get() == 'fps':
-            hint = "输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml"
-        else:
-            hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
-        self.output_hint_label.configure(text=hint)
-
-    # ===== 输入文件列表 =====
+        # ===== 输入文件列表 =====
         input_frame = ttk.LabelFrame(main_frame, text="输入文件（支持多选）", padding=8)
         input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
@@ -219,6 +208,15 @@ class Polygon2FPSApp:
             font=('微软雅黑', 8),
         )
         footer.pack(pady=(2, 0))
+
+    def _on_format_changed(self):
+        """格式切换时的界面调整"""
+        # 更新输出目录提示
+        if self.output_format.get() == 'fps':
+            hint = "输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml"
+        else:
+            hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
+        self.output_hint_label.configure(text=hint)
 
     def _log(self, message: str, tag: str = 'info'):
         """向日志区域添加消息"""
