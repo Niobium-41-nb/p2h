@@ -35,6 +35,7 @@ class Polygon2FPSApp:
         self.input_files = []           # 待转换文件列表
         self.output_dir = tk.StringVar()
         self.output_format = tk.StringVar(value='fps')  # 'fps' 或 'hydro'
+        self.max_test_data_mb = tk.StringVar(value='50')  # 测试数据大小上限（MB）
         self.is_converting = False
 
         self._build_ui()
@@ -64,6 +65,9 @@ class Polygon2FPSApp:
             font=('微软雅黑', 14, 'bold'),
         )
         title_label.pack(pady=(0, 12))
+
+        # 保存 limit_frame 引用供 _on_format_changed 使用
+        self.limit_frame = None
 
         # ===== 输出格式选择 =====
         format_frame = ttk.LabelFrame(main_frame, text="输出格式", padding=8)
@@ -129,6 +133,33 @@ class Polygon2FPSApp:
         # 文件数量标签
         self.count_label = ttk.Label(input_frame, text="共 0 个文件", foreground='gray')
         self.count_label.pack(anchor=tk.W, pady=(2, 0))
+
+        # ===== 测试数据大小限制（仅 FPS 格式） =====
+        self.limit_frame = ttk.LabelFrame(main_frame, text="测试数据大小限制", padding=8)
+        self.limit_frame.pack(fill=tk.X, pady=(0, 8))
+
+        limit_row = ttk.Frame(self.limit_frame)
+        limit_row.pack(fill=tk.X)
+
+        ttk.Label(limit_row, text="最多包含").pack(side=tk.LEFT)
+
+        self.limit_spinbox = ttk.Spinbox(
+            limit_row,
+            from_=1, to=1000,
+            textvariable=self.max_test_data_mb,
+            width=6,
+        )
+        self.limit_spinbox.pack(side=tk.LEFT, padx=(4, 4))
+
+        ttk.Label(limit_row, text="MB 的测试数据（超出部分将被截断，0=不限制）").pack(side=tk.LEFT)
+
+        self.limit_hint_label = ttk.Label(
+            self.limit_frame,
+            text="提示：大多数 OJ 平台上传限制为 50MB~100MB，建议将 FPS 文件控制在 50MB 以内",
+            foreground='gray',
+            font=('微软雅黑', 8),
+        )
+        self.limit_hint_label.pack(anchor=tk.W, pady=(2, 0))
 
         # ===== 输出目录选择 =====
         output_frame = ttk.LabelFrame(main_frame, text="输出目录", padding=8)
@@ -217,6 +248,13 @@ class Polygon2FPSApp:
         else:
             hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
         self.output_hint_label.configure(text=hint)
+
+        # 显示/隐藏测试数据大小限制（仅 FPS 格式需要）
+        if hasattr(self, 'limit_frame') and self.limit_frame is not None:
+            if self.output_format.get() == 'fps':
+                self.limit_frame.pack(fill=tk.X, pady=(0, 8), before=self.limit_frame.master.winfo_children()[-1])
+            else:
+                self.limit_frame.pack_forget()
 
     def _log(self, message: str, tag: str = 'info'):
         """向日志区域添加消息"""
@@ -360,15 +398,26 @@ class Polygon2FPSApp:
         self._log(f'输出目录: {out_dir}', 'info')
         self._log('-' * 56, 'info')
 
+        # 解析测试数据大小限制
+        try:
+            max_mb = float(self.max_test_data_mb.get())
+            if max_mb < 0:
+                max_mb = 0
+        except ValueError:
+            max_mb = 0
+
+        if fmt == 'hydro':
+            max_mb = 0  # Hydro 格式不需要此限制
+
         # 在后台线程中执行批量转换
         thread = threading.Thread(
             target=self._do_batch_convert,
-            args=(list(self.input_files), out_dir, fmt),
+            args=(list(self.input_files), out_dir, fmt, max_mb),
             daemon=True,
         )
         thread.start()
 
-    def _do_batch_convert(self, files: list, out_dir: str, fmt: str):
+    def _do_batch_convert(self, files: list, out_dir: str, fmt: str, max_mb: float = 0):
         """执行批量转换（后台线程）"""
         total = len(files)
         success_count = 0
@@ -386,7 +435,7 @@ class Polygon2FPSApp:
             try:
                 if fmt == 'fps':
                     out_path = os.path.join(out_dir, f'{base_name}.fps.xml')
-                    convert_to_fps(file_path, out_path)
+                    convert_to_fps(file_path, out_path, max_test_data_mb=max_mb)
                     self.root.after(0, self._log,
                                     f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
                 else:  # hydro

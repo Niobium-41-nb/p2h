@@ -184,8 +184,15 @@ def _xml_tag_with_attr(name: str, content: str, attrs: dict, indent: int = 1) ->
     return f'{pad}<{name} {attr_str}><![CDATA[{content}]]></{name}>'
 
 
-def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
-    """构建 FPS XML 字符串（手动构建，避免转义问题）"""
+def build_fps_xml(root: ET.Element, extract_dir: str,
+                  max_test_data_mb: float = 0) -> str:
+    """构建 FPS XML 字符串（手动构建，避免转义问题）
+
+    Args:
+        root: problem.xml 的根元素
+        extract_dir: 解压目录
+        max_test_data_mb: 测试数据大小上限（MB），0 表示不限制
+    """
     # 基本信息
     names_elem = root.find('names')
     title = ''
@@ -236,6 +243,21 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
 
     # 所有测试数据
     all_tests = get_all_tests(extract_dir, root)
+
+    # 如果设置了大小限制，过滤测试数据
+    test_data_size_limit = max_test_data_mb * 1024 * 1024 if max_test_data_mb > 0 else 0
+    if test_data_size_limit > 0:
+        filtered_tests = []
+        current_size = 0
+        for test_in, test_out in all_tests:
+            # 估算大小（CDATA 开销约 12 字节 + XML 标签开销）
+            est_size = len(test_in.encode('utf-8')) + len(test_out.encode('utf-8')) + 200
+            if current_size + est_size > test_data_size_limit:
+                break
+            filtered_tests.append((test_in, test_out))
+            current_size += est_size
+        if len(filtered_tests) < len(all_tests):
+            all_tests = filtered_tests
 
     # 来源
     short_name = root.get('short-name', '')
@@ -291,7 +313,8 @@ def build_fps_xml(root: ET.Element, extract_dir: str) -> str:
 
 
 def convert(polygon_zip: str, output_fps: Optional[str] = None,
-            progress_callback=None) -> str:
+            progress_callback=None,
+            max_test_data_mb: float = 0) -> str:
     """
     主转换函数。
 
@@ -299,6 +322,7 @@ def convert(polygon_zip: str, output_fps: Optional[str] = None,
         polygon_zip: polygon.codeforces 格式的 zip 文件路径
         output_fps: 输出的 FPS XML 文件路径
         progress_callback: 进度回调函数，接收 (stage, message) 参数
+        max_test_data_mb: 测试数据大小上限（MB），0 表示不限制
 
     Returns:
         输出文件路径
@@ -321,7 +345,7 @@ def convert(polygon_zip: str, output_fps: Optional[str] = None,
         if progress_callback:
             progress_callback(50, '正在构建 FPS XML...')
 
-        fps_xml = build_fps_xml(root, tmp_dir)
+        fps_xml = build_fps_xml(root, tmp_dir, max_test_data_mb)
 
         if output_fps is None:
             base_name = os.path.splitext(os.path.basename(polygon_zip))[0]
