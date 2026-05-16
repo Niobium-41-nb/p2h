@@ -90,7 +90,9 @@ class Polygon2FPSApp:
 
     def _on_format_changed(self):
         """格式切换时的界面调整"""
-        # 更新输出目录提示
+        # 更新输出目录提示（UI 尚未构建完成时跳过）
+        if not hasattr(self, 'output_hint_label'):
+            return
         if self.output_format.get() == 'fps':
             hint = "输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml"
         else:
