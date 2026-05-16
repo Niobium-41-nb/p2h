@@ -1,0 +1,24 @@
+# 解压目录
+extracted/
+
+# 生成的 FPS 输出文件
+*.fps.xml
+
+# 原始 polygon zip 文件
+*.zip
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+.DS_Store
