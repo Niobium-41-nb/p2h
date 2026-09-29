@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Polygon Codeforces → FPS / Hydro 格式转换工具 - 图形界面版（支持批量转换）
+Polygon Codeforces → FPS / Hydro / HOJ 格式转换工具 - 图形界面版（支持批量转换）
 
 用法:
     python polygon2fps_gui.py
@@ -10,22 +10,28 @@ Polygon Codeforces → FPS / Hydro 格式转换工具 - 图形界面版（支持
 import os
 import sys
 import threading
+import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 # 导入核心转换模块
 from polygon2fps_core import convert as convert_to_fps
 from polygon2hydro_core import convert_to_hydro
+from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj,
+                              HojOptions, HOJ_LANGUAGES)
 
 
 class Polygon2FPSApp:
-    """Polygon → FPS / Hydro 转换 GUI 应用程序（支持批量转换）"""
+    """Polygon → FPS / Hydro / HOJ 转换 GUI 应用程序（支持批量转换）"""
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Polygon → FPS / Hydro 格式转换工具")
-        self.root.geometry("780x640")
-        self.root.minsize(640, 480)
+        self.root.title("Polygon → FPS / Hydro / HOJ 格式转换工具")
+        # 窗口尺寸根据屏幕自适应（HOJ 选项面板较高）
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f'{min(920, sw - 60)}x{min(980, sh - 80)}')
+        self.root.minsize(760, 560)
 
         # 设置样式
         self.style = ttk.Style()
@@ -34,9 +40,21 @@ class Polygon2FPSApp:
         # 变量
         self.input_files = []           # 待转换文件列表
         self.output_dir = tk.StringVar()
-        self.output_format = tk.StringVar(value='fps')  # 'fps' 或 'hydro'
-        self.max_test_data_mb = tk.StringVar(value='50')  # 测试数据大小上限（MB）
+        self.output_format = tk.StringVar(value='fps')  # 'fps' / 'hydro' / 'hoj'
+        self.max_test_data_mb = tk.StringVar(value='0')  # FPS 测试数据大小上限（MB），0 = 不限制
         self.is_converting = False
+
+        # HOJ 转换选项
+        self.hoj_max_mb = tk.StringVar(value='0')
+        self.hoj_author = tk.StringVar(value='')
+        self.hoj_auth = tk.StringVar(value='1 - 公开')
+        self.hoj_type = tk.StringVar(value='0 - ACM')
+        self.hoj_difficulty = tk.StringVar(value='0 - 未设置')
+        self.hoj_case_mode = tk.StringVar(value='default')
+        self.hoj_tags = tk.StringVar(value='')
+        self.hoj_problem_id = tk.StringVar(value='')
+        self.hoj_languages = tk.StringVar(value=', '.join(HOJ_LANGUAGES))
+        self.hoj_merge = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._center_window()
@@ -55,23 +73,23 @@ class Polygon2FPSApp:
     def _build_ui(self):
         """构建界面"""
         # 主框架
-        main_frame = ttk.Frame(self.root, padding=16)
+        main_frame = ttk.Frame(self.root, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # ===== 标题 =====
         title_label = ttk.Label(
             main_frame,
-            text="Polygon Codeforces → FPS / Hydro 格式转换",
-            font=('微软雅黑', 14, 'bold'),
+            text="Polygon Codeforces → FPS / Hydro / HOJ 格式转换",
+            font=('微软雅黑', 13, 'bold'),
         )
-        title_label.pack(pady=(0, 12))
+        title_label.pack(pady=(0, 8))
 
         # 保存 limit_frame 引用供 _on_format_changed 使用
         self.limit_frame = None
 
         # ===== 输出格式选择 =====
         format_frame = ttk.LabelFrame(main_frame, text="输出格式", padding=8)
-        format_frame.pack(fill=tk.X, pady=(0, 8))
+        format_frame.pack(fill=tk.X, pady=(0, 6))
 
         format_row = ttk.Frame(format_frame)
         format_row.pack(fill=tk.X)
@@ -90,11 +108,19 @@ class Polygon2FPSApp:
             variable=self.output_format,
             value='hydro',
             command=self._on_format_changed,
+        ).pack(anchor=tk.W, pady=(0, 2))
+
+        ttk.Radiobutton(
+            format_row,
+            text="HOJ 格式（.zip）— 兼容 HOJ 后台“导入题目”",
+            variable=self.output_format,
+            value='hoj',
+            command=self._on_format_changed,
         ).pack(anchor=tk.W)
 
         # ===== 输入文件列表 =====
         input_frame = ttk.LabelFrame(main_frame, text="输入文件（支持多选）", padding=8)
-        input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         # 按钮行
         btn_row = ttk.Frame(input_frame)
@@ -115,6 +141,7 @@ class Polygon2FPSApp:
             list_frame,
             selectmode=tk.EXTENDED,
             font=('Consolas', 10),
+            height=4,
             bg='#1e1e1e',
             fg='#d4d4d4',
             selectbackground='#264f78',
@@ -134,9 +161,13 @@ class Polygon2FPSApp:
         self.count_label = ttk.Label(input_frame, text="共 0 个文件", foreground='gray')
         self.count_label.pack(anchor=tk.W, pady=(2, 0))
 
-        # ===== 测试数据大小限制（仅 FPS 格式） =====
-        self.limit_frame = ttk.LabelFrame(main_frame, text="测试数据大小限制", padding=8)
-        self.limit_frame.pack(fill=tk.X, pady=(0, 8))
+        # ===== 与格式相关的选项区（FPS / HOJ 各一个面板） =====
+        self.specific_frame = ttk.Frame(main_frame)
+        self.specific_frame.pack(fill=tk.X)
+
+        # ----- 测试数据大小限制（仅 FPS 格式） -----
+        self.limit_frame = ttk.LabelFrame(self.specific_frame, text="测试数据大小限制", padding=8)
+        self.limit_frame.pack(fill=tk.X, pady=(0, 6))
 
         limit_row = ttk.Frame(self.limit_frame)
         limit_row.pack(fill=tk.X)
@@ -145,7 +176,7 @@ class Polygon2FPSApp:
 
         self.limit_spinbox = ttk.Spinbox(
             limit_row,
-            from_=1, to=1000,
+            from_=0, to=1000,
             textvariable=self.max_test_data_mb,
             width=6,
         )
@@ -155,15 +186,19 @@ class Polygon2FPSApp:
 
         self.limit_hint_label = ttk.Label(
             self.limit_frame,
-            text="提示：大多数 OJ 平台上传限制为 50MB~100MB，建议将 FPS 文件控制在 50MB 以内",
+            text="提示：大多数 OJ 平台上传限制为 50MB~100MB，如遇上传失败可在此限制测试数据大小",
             foreground='gray',
             font=('微软雅黑', 8),
         )
         self.limit_hint_label.pack(anchor=tk.W, pady=(2, 0))
 
+        # ----- HOJ 选项（仅 HOJ 格式） -----
+        self.hoj_frame = ttk.LabelFrame(self.specific_frame, text="HOJ 导入选项", padding=8)
+        self._build_hoj_options(self.hoj_frame)
+
         # ===== 输出目录选择 =====
         output_frame = ttk.LabelFrame(main_frame, text="输出目录", padding=8)
-        output_frame.pack(fill=tk.X, pady=(0, 8))
+        output_frame.pack(fill=tk.X, pady=(0, 6))
 
         output_row = ttk.Frame(output_frame)
         output_row.pack(fill=tk.X)
@@ -182,7 +217,7 @@ class Polygon2FPSApp:
 
         # ===== 转换按钮 =====
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=(4, 8))
+        btn_frame.pack(fill=tk.X, pady=(2, 6))
 
         self.convert_btn = ttk.Button(
             btn_frame,
@@ -220,7 +255,7 @@ class Polygon2FPSApp:
             fg='#d4d4d4',
             insertbackground='white',
             state='disabled',
-            height=10,
+            height=6,
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -231,30 +266,73 @@ class Polygon2FPSApp:
         self.log_text.tag_config('warn', foreground='#dcdcaa')
         self.log_text.tag_config('header', foreground='#569cd6', font=('Consolas', 9, 'bold'))
 
-        # ===== 底部信息 =====
-        footer = ttk.Label(
-            main_frame,
-            text="支持 polygon.codeforces.com 导出的题目压缩包 → FPS / Hydro 兼容格式",
-            foreground='gray',
-            font=('微软雅黑', 8),
-        )
-        footer.pack(pady=(2, 0))
+    def _build_hoj_options(self, parent: ttk.LabelFrame):
+        """构建 HOJ 选项面板（紧凑两列布局，控制在 5 行以内以保证小屏幕上不裁切日志区）"""
+        parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(3, weight=1)
+
+        def pair(r, label1, widget1, label2=None, widget2=None):
+            ttk.Label(parent, text=label1).grid(row=r, column=0, sticky=tk.W, padx=(0, 4), pady=2)
+            widget1.grid(row=r, column=1, sticky=tk.EW, pady=2)
+            if label2 is not None:
+                ttk.Label(parent, text=label2).grid(row=r, column=2, sticky=tk.W,
+                                                    padx=(10, 4), pady=2)
+                widget2.grid(row=r, column=3, sticky=tk.EW, pady=2)
+
+        pair(0, '题目作者', ttk.Entry(parent, textvariable=self.hoj_author),
+             '展示 ID', ttk.Entry(parent, textvariable=self.hoj_problem_id))
+        pair(1, '题目权限',
+             ttk.Combobox(parent, textvariable=self.hoj_auth, state='readonly',
+                          values=['1 - 公开', '2 - 隐藏', '3 - 比赛中']),
+             '题目类型',
+             ttk.Combobox(parent, textvariable=self.hoj_type, state='readonly',
+                          values=['0 - ACM', '1 - OI']))
+        pair(2, '题目难度',
+             ttk.Combobox(parent, textvariable=self.hoj_difficulty, state='readonly',
+                          values=['0 - 未设置', '1 - 简单', '2 - 中等', '3 - 困难']),
+             '用例模式',
+             ttk.Combobox(parent, textvariable=self.hoj_case_mode, state='readonly',
+                          values=['default', 'ergodic_without_error',
+                                  'subtask_lowest', 'subtask_average']))
+
+        # 第 4 行：标签 + 合并开关
+        ttk.Label(parent, text='标签').grid(row=3, column=0, sticky=tk.W, padx=(0, 4), pady=2)
+        ttk.Entry(parent, textvariable=self.hoj_tags).grid(
+            row=3, column=1, sticky=tk.EW, pady=2)
+        ttk.Checkbutton(parent, text='合并为单个 ZIP', variable=self.hoj_merge).grid(
+            row=3, column=2, columnspan=2, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # 第 5 行：支持语言 + 测试数据上限
+        ttk.Label(parent, text='支持语言').grid(row=4, column=0, sticky=tk.W, padx=(0, 4), pady=(2, 0))
+        ttk.Entry(parent, textvariable=self.hoj_languages).grid(
+            row=4, column=1, sticky=tk.EW, pady=(2, 0))
+        tail = ttk.Frame(parent)
+        tail.grid(row=4, column=2, columnspan=2, sticky=tk.W, padx=(10, 0), pady=(2, 0))
+        ttk.Label(tail, text='数据上限').pack(side=tk.LEFT)
+        ttk.Spinbox(tail, from_=0, to=1000, textvariable=self.hoj_max_mb, width=5).pack(
+            side=tk.LEFT, padx=(4, 4))
+        ttk.Label(tail, text='MB（0 = 不限制）').pack(side=tk.LEFT)
 
     def _on_format_changed(self):
         """格式切换时的界面调整"""
+        fmt = self.output_format.get()
+
         # 更新输出目录提示
-        if self.output_format.get() == 'fps':
+        if fmt == 'fps':
             hint = "输出文件将保存在此目录，文件名自动生成为 {原文件名}.fps.xml"
-        else:
+        elif fmt == 'hydro':
             hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
+        else:
+            hint = "每个题目生成 {题目ID}.hoj.zip；勾选“合并为单个 ZIP”时输出 hoj_batch_时间戳.zip"
         self.output_hint_label.configure(text=hint)
 
-        # 显示/隐藏测试数据大小限制（仅 FPS 格式需要）
-        if hasattr(self, 'limit_frame') and self.limit_frame is not None:
-            if self.output_format.get() == 'fps':
-                self.limit_frame.pack(fill=tk.X, pady=(0, 8), before=self.limit_frame.master.winfo_children()[-1])
-            else:
-                self.limit_frame.pack_forget()
+        # 显示/隐藏与格式相关的选项面板
+        self.limit_frame.pack_forget()
+        self.hoj_frame.pack_forget()
+        if fmt == 'fps':
+            self.limit_frame.pack(fill=tk.X, pady=(0, 6))
+        elif fmt == 'hoj':
+            self.hoj_frame.pack(fill=tk.X, pady=(0, 6))
 
     def _log(self, message: str, tag: str = 'info'):
         """向日志区域添加消息"""
@@ -378,7 +456,7 @@ class Polygon2FPSApp:
             return
 
         fmt = self.output_format.get()
-        fmt_name = 'FPS' if fmt == 'fps' else 'Hydro'
+        fmt_name = {'fps': 'FPS', 'hydro': 'Hydro', 'hoj': 'HOJ'}.get(fmt, fmt.upper())
 
         # 禁用按钮
         self.convert_btn.configure(state='disabled')
@@ -409,20 +487,96 @@ class Polygon2FPSApp:
         if fmt == 'hydro':
             max_mb = 0  # Hydro 格式不需要此限制
 
+        # 组装 HOJ 选项
+        hoj_options = None
+        hoj_merge = False
+        if fmt == 'hoj':
+            hoj_options = self._collect_hoj_options()
+            hoj_merge = self.hoj_merge.get()
+            self._log(f'题目权限: {self.hoj_auth.get()} | 类型: {self.hoj_type.get()}'
+                      f' | 难度: {self.hoj_difficulty.get()}', 'info')
+            self._log(f'用例模式: {self.hoj_case_mode.get()}'
+                      f' | 作者: {hoj_options.author or "（由导入者决定）"}', 'info')
+            if hoj_options.tags:
+                self._log(f'标签: {", ".join(hoj_options.tags)}', 'info')
+            self._log('题面样例将写入 examples，全部测试点写入 samples（题解/教程不导出）', 'info')
+            self._log(f'输出方式: {"合并为单个 ZIP" if hoj_merge else "每题一个 ZIP"}', 'info')
+
         # 在后台线程中执行批量转换
         thread = threading.Thread(
             target=self._do_batch_convert,
-            args=(list(self.input_files), out_dir, fmt, max_mb),
+            args=(list(self.input_files), out_dir, fmt, max_mb, hoj_options, hoj_merge),
             daemon=True,
         )
         thread.start()
 
-    def _do_batch_convert(self, files: list, out_dir: str, fmt: str, max_mb: float = 0):
+    def _collect_hoj_options(self) -> HojOptions:
+        """从界面控件读取 HOJ 转换选项"""
+        def head(value: str) -> str:
+            return value.split('-')[0].strip()
+
+        def to_int(value: str, default: int = 0) -> int:
+            try:
+                return int(head(value))
+            except (ValueError, AttributeError):
+                return default
+
+        try:
+            max_mb = float(self.hoj_max_mb.get())
+            if max_mb < 0:
+                max_mb = 0
+        except ValueError:
+            max_mb = 0
+
+        return HojOptions(
+            author=self.hoj_author.get().strip(),
+            auth=to_int(self.hoj_auth.get(), 1),
+            problem_type=to_int(self.hoj_type.get(), 0),
+            difficulty=to_int(self.hoj_difficulty.get(), 0),
+            judge_case_mode=self.hoj_case_mode.get().strip() or 'default',
+            tags=[t.strip() for t in self.hoj_tags.get().replace('，', ',').split(',') if t.strip()],
+            languages=[l.strip() for l in self.hoj_languages.get().replace('，', ',').split(',') if l.strip()],
+            problem_id=self.hoj_problem_id.get().strip(),
+            max_test_data_mb=max_mb,
+        )
+
+    def _do_batch_convert(self, files: list, out_dir: str, fmt: str,
+                          max_mb: float = 0, hoj_options: HojOptions = None,
+                          hoj_merge: bool = False):
         """执行批量转换（后台线程）"""
         total = len(files)
         success_count = 0
         fail_count = 0
 
+        # ---- HOJ 合并模式：所有题目打包成一个 zip ----
+        if fmt == 'hoj' and hoj_merge:
+            stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            out_zip = os.path.join(out_dir, f'hoj_batch_{stamp}.zip')
+
+            def cb(stage, message):
+                if stage < 0:
+                    self.root.after(0, self._log, f'  {message}', 'error')
+                else:
+                    self.root.after(0, self._update_progress, max(0, min(stage, 100)), message)
+
+            try:
+                result, errors = convert_batch_to_hoj(files, out_zip, hoj_options, cb)
+                success_count = total - len(errors)
+                fail_count = len(errors)
+                for err in errors:
+                    self.root.after(0, self._log, f'  ⚠ {err}', 'warn')
+                if success_count > 0:
+                    self.root.after(0, self._log,
+                                    f'  ✅ 已生成 HOJ 导入包: {os.path.basename(result)}'
+                                    f'（{success_count} 题）', 'success')
+            except Exception as e:
+                fail_count = total
+                self.root.after(0, self._log, f'  ❌ 合并转换失败: {e}', 'error')
+
+            self.root.after(0, self._on_batch_complete, total, success_count, fail_count)
+            return
+
+        # ---- 逐题转换 ----
         for idx, file_path in enumerate(files):
             file_name = os.path.basename(file_path)
             base_name = os.path.splitext(file_name)[0]
@@ -438,6 +592,10 @@ class Polygon2FPSApp:
                     convert_to_fps(file_path, out_path, max_test_data_mb=max_mb)
                     self.root.after(0, self._log,
                                     f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
+                elif fmt == 'hoj':
+                    out_path = convert_to_hoj(file_path, out_dir, hoj_options)
+                    self.root.after(0, self._log,
+                                    f'  ✅ [{idx + 1}/{total}] {file_name} → {os.path.basename(out_path)}', 'success')
                 else:  # hydro
                     convert_to_hydro(file_path, out_dir)
                     self.root.after(0, self._log,
