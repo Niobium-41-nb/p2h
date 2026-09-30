@@ -8,6 +8,7 @@ Polygon Codeforces → FPS / Hydro / HOJ 格式转换工具 - 图形界面版（
 """
 
 import os
+import re
 import sys
 import threading
 import datetime
@@ -18,7 +19,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from polygon2fps_core import convert as convert_to_fps
 from polygon2hydro_core import convert_to_hydro
 from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj,
-                              HojOptions, HOJ_LANGUAGES)
+                              HojOptions, HOJ_LANGUAGES, HOJ_DIFFICULTIES)
 
 
 class Polygon2FPSApp:
@@ -49,7 +50,7 @@ class Polygon2FPSApp:
         self.hoj_author = tk.StringVar(value='')
         self.hoj_auth = tk.StringVar(value='1 - 公开')
         self.hoj_type = tk.StringVar(value='0 - ACM')
-        self.hoj_difficulty = tk.StringVar(value='0 - 未设置')
+        self.hoj_difficulty = tk.StringVar(value=HOJ_DIFFICULTIES[0])
         self.hoj_case_mode = tk.StringVar(value='default')
         self.hoj_tags = tk.StringVar(value='')
         self.hoj_problem_id = tk.StringVar(value='')
@@ -289,7 +290,7 @@ class Polygon2FPSApp:
                           values=['0 - ACM', '1 - OI']))
         pair(2, '题目难度',
              ttk.Combobox(parent, textvariable=self.hoj_difficulty, state='readonly',
-                          values=['0 - 未设置', '1 - 简单', '2 - 中等', '3 - 困难']),
+                          values=list(HOJ_DIFFICULTIES)),
              '用例模式',
              ttk.Combobox(parent, textvariable=self.hoj_case_mode, state='readonly',
                           values=['default', 'ergodic_without_error',
@@ -512,14 +513,10 @@ class Polygon2FPSApp:
 
     def _collect_hoj_options(self) -> HojOptions:
         """从界面控件读取 HOJ 转换选项"""
-        def head(value: str) -> str:
-            return value.split('-')[0].strip()
-
         def to_int(value: str, default: int = 0) -> int:
-            try:
-                return int(head(value))
-            except (ValueError, AttributeError):
-                return default
+            """从 '4 - 普及+/提高-' 这类下拉框中取出前面的数字"""
+            match = re.match(r'\s*(-?\d+)', value or '')
+            return int(match.group(1)) if match else default
 
         try:
             max_mb = float(self.hoj_max_mb.get())

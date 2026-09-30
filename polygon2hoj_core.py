@@ -45,8 +45,35 @@ AUTH_CONTEST = 3     # 比赛中
 TYPE_ACM = 0
 TYPE_OI = 1
 
+# 题目难度（二次开发后的 HOJ 共 9 个等级：0~8）
+# 与 HOJ 前端下拉框保持一致；如需再次调整，只需修改这个列表
+HOJ_DIFFICULTIES = [
+    '0 - 暂无评定',
+    '1 - 入门',
+    '2 - 普及-',
+    '3 - 普及',
+    '4 - 普及+/提高-',
+    '5 - 提高',
+    '6 - 提高+/省选-',
+    '7 - 省选/NOI-',
+    '8 - NOI/NOI+/CTS',
+]
+HOJ_DIFFICULTY_MIN = 0
+HOJ_DIFFICULTY_MAX = len(HOJ_DIFFICULTIES) - 1
+
 # 用例模式
 JUDGE_CASE_MODES = ["default", "ergodic_without_error", "subtask_lowest", "subtask_average"]
+
+
+def normalize_difficulty(value) -> int:
+    """把难度值收敛到合法范围（0~8），非法值回退为 0（暂无评定）"""
+    try:
+        level = int(value)
+    except (TypeError, ValueError):
+        return HOJ_DIFFICULTY_MIN
+    if level < HOJ_DIFFICULTY_MIN or level > HOJ_DIFFICULTY_MAX:
+        return HOJ_DIFFICULTY_MIN
+    return level
 
 
 # ========== 转换选项 ==========
@@ -58,7 +85,7 @@ class HojOptions:
     author: str = ''                      # 题目作者（留空则由导入者用户名作为作者）
     auth: int = AUTH_PUBLIC               # 1 公开 / 2 隐藏 / 3 比赛中
     problem_type: int = TYPE_ACM          # 0 ACM / 1 OI
-    difficulty: int = 0                   # 0 未设置 / 1 简单 / 2 中等 / 3 困难
+    difficulty: int = HOJ_DIFFICULTY_MIN   # 难度 0~8（0 暂无评定、1 入门 … 8 NOI/NOI+/CTS）
     judge_case_mode: str = 'default'      # 用例模式
     tags: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=lambda: list(HOJ_LANGUAGES))
@@ -71,7 +98,7 @@ class HojOptions:
             author=(self.author or '').strip(),
             auth=self.auth if self.auth in (AUTH_PUBLIC, AUTH_PRIVATE, AUTH_CONTEST) else AUTH_PUBLIC,
             problem_type=self.problem_type if self.problem_type in (TYPE_ACM, TYPE_OI) else TYPE_ACM,
-            difficulty=self.difficulty if self.difficulty in (0, 1, 2, 3) else 0,
+            difficulty=normalize_difficulty(self.difficulty),
             judge_case_mode=self.judge_case_mode if self.judge_case_mode in JUDGE_CASE_MODES else 'default',
             tags=[t.strip() for t in (self.tags or []) if t and t.strip()],
             languages=[l.strip() for l in (self.languages or []) if l and l.strip()] or list(HOJ_LANGUAGES),

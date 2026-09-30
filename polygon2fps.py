@@ -116,7 +116,7 @@ def run_hoj_cli(args):
     import argparse
     import datetime
     from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj, HojOptions,
-                                  AUTH_PUBLIC)
+                                  AUTH_PUBLIC, HOJ_DIFFICULTIES, HOJ_DIFFICULTY_MAX)
 
     parser = argparse.ArgumentParser(
         prog='polygon2fps.py hoj',
@@ -133,7 +133,8 @@ def run_hoj_cli(args):
     parser.add_argument('--type', dest='problem_type', choices=['acm', 'oi'], default='acm',
                         help='题目类型：acm / oi（默认 acm）')
     parser.add_argument('--difficulty', type=int, default=0,
-                        help='难度：0 未设置 / 1 简单 / 2 中等 / 3 困难（默认 0）')
+                        help='难度 0~%d：%s（默认 0）'
+                             % (HOJ_DIFFICULTY_MAX, '、'.join(HOJ_DIFFICULTIES)))
     parser.add_argument('--judge-case-mode', default='default',
                         help='用例模式：default / ergodic_without_error / subtask_lowest / subtask_average')
     parser.add_argument('--tags', default='', help='标签，逗号分隔')
@@ -147,6 +148,12 @@ def run_hoj_cli(args):
         print(f'错误: 文件不存在 - {", ".join(missing)}')
         print('提示: 输出目录/输出 zip 请用 -o 指定，例如：'
               'python polygon2fps.py hoj problem.zip -o ./out')
+        sys.exit(1)
+
+    if not 0 <= ns.difficulty <= HOJ_DIFFICULTY_MAX:
+        print(f'错误: --difficulty 只能取 0~{HOJ_DIFFICULTY_MAX}')
+        for item in HOJ_DIFFICULTIES:
+            print(f'  {item}')
         sys.exit(1)
 
     options = HojOptions(
