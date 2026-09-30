@@ -13,6 +13,8 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 from typing import Optional, List, Tuple
 
+from polygon_tests import (load_test_data, failure_message)
+
 
 def extract_zip(zip_path: str, extract_dir: str) -> str:
     """解压 zip 文件到指定目录"""
@@ -339,30 +341,34 @@ def get_samples(extract_dir: str, lang: str = 'chinese') -> List[Tuple[str, str]
     return samples
 
 
-def get_all_tests(extract_dir: str, root: ET.Element) -> List[Tuple[str, str]]:
-    """获取所有测试数据"""
-    tests_dir = os.path.join(extract_dir, 'tests')
-    tests = []
+def get_test_data(extract_dir: str, root: ET.Element, max_test_data_mb: float = 0,
+                  log=None, generate_tests: bool = True):
+    """读取压缩包中的测试数据；缺失的部分按 Polygon 的方式动态生成
 
-    if not os.path.isdir(tests_dir):
-        return tests
+    Polygon 的测试点可能是由生成器（gen）动态生成的，答案则要靠主标程算出来，
+    压缩包里不一定存有静态数据，因此统一交给 polygon_tests 处理。
 
-    testset = root.find('.//testset')
-    test_count = 0
-    if testset is not None:
-        tc = testset.find('test-count')
-        if tc is not None and tc.text:
-            test_count = int(tc.text)
+    Returns:
+        polygon_tests.LoadResult
+    """
+    limit = int(max_test_data_mb * 1024 * 1024) if max_test_data_mb and max_test_data_mb > 0 else 0
+    result = load_test_data(extract_dir, root, generate=generate_tests, log=log,
+                            max_total_bytes=limit)
+    if result.test_count and not result.tests:
+        raise ValueError(failure_message(result))
+    return result
 
-    for i in range(1, test_count + 1):
-        input_file = os.path.join(tests_dir, f'{i:02d}')
-        output_file = os.path.join(tests_dir, f'{i:02d}.a')
-        inp = get_text_content(input_file).strip()
-        out = get_text_content(output_file).strip()
-        if inp and out:
-            tests.append((inp, out))
 
-    return tests
+def _decode_text(data: bytes) -> str:
+    return data.decode('utf-8', 'replace')
+
+
+def get_all_tests(extract_dir: str, root: ET.Element, max_test_data_mb: float = 0,
+                  log=None, generate_tests: bool = True) -> List[Tuple[str, str]]:
+    """兼容旧接口：返回 [(输入文本, 输出文本)]"""
+    result = get_test_data(extract_dir, root, max_test_data_mb, log, generate_tests)
+    return [(_decode_text(t.input).strip(), _decode_text(t.answer).strip())
+            for t in result.tests]
 
 
 def _xml_tag(name: str, content: str, indent: int = 1) -> str:
@@ -379,13 +385,16 @@ def _xml_tag_with_attr(name: str, content: str, attrs: dict, indent: int = 1) ->
 
 
 def build_fps_xml(root: ET.Element, extract_dir: str,
-                  max_test_data_mb: float = 0) -> str:
+                  max_test_data_mb: float = 0, log=None,
+                  generate_tests: bool = True) -> str:
     """构建 FPS XML 字符串（手动构建，避免转义问题）
 
     Args:
         root: problem.xml 的根元素
         extract_dir: 解压目录
         max_test_data_mb: 测试数据大小上限（MB），0 表示不限制
+        log: 日志回调（生成测试数据时会回调多行文字）
+        generate_tests: 是否允许运行动态生成（生成器 + 标程）
     """
     # 基本信息
     names_elem = root.find('names')
@@ -422,36 +431,23 @@ def build_fps_xml(root: ET.Element, extract_dir: str,
     if output_tex:
         output_desc = tex_to_plain_text(output_tex)
 
-    # 样例
+    # 测试数据：Polygon 的生成型测试点需要现场运行生成器与主标程
+    test_result = get_test_data(extract_dir, root, max_test_data_mb,
+                                log=log, generate_tests=generate_tests)
+    if log:
+        log(test_result.summary())
+
+    # 样例：优先用题面里的 example.*，缺失时回退到标记为 sample 的测试点
     samples = get_samples(extract_dir, 'chinese')
     if not samples:
-        tests_elem = testset.find('tests') if testset is not None else None
-        if tests_elem is not None:
-            tests_dir = os.path.join(extract_dir, 'tests')
-            for i, test_elem in enumerate(tests_elem.findall('test'), start=1):
-                if test_elem.get('sample') == 'true':
-                    inp = get_text_content(os.path.join(tests_dir, f'{i:02d}')).strip()
-                    out = get_text_content(os.path.join(tests_dir, f'{i:02d}.a')).strip()
-                    if inp and out:
-                        samples.append((inp, out))
+        for test in test_result.tests:
+            if test.sample:
+                samples.append((_decode_text(test.input).strip(),
+                                _decode_text(test.answer).strip()))
 
     # 所有测试数据
-    all_tests = get_all_tests(extract_dir, root)
-
-    # 如果设置了大小限制，过滤测试数据
-    test_data_size_limit = max_test_data_mb * 1024 * 1024 if max_test_data_mb > 0 else 0
-    if test_data_size_limit > 0:
-        filtered_tests = []
-        current_size = 0
-        for test_in, test_out in all_tests:
-            # 估算大小（CDATA 开销约 12 字节 + XML 标签开销）
-            est_size = len(test_in.encode('utf-8')) + len(test_out.encode('utf-8')) + 200
-            if current_size + est_size > test_data_size_limit:
-                break
-            filtered_tests.append((test_in, test_out))
-            current_size += est_size
-        if len(filtered_tests) < len(all_tests):
-            all_tests = filtered_tests
+    all_tests = [(_decode_text(t.input).strip(), _decode_text(t.answer).strip())
+                 for t in test_result.tests]
 
     # 来源
     short_name = root.get('short-name', '')
@@ -486,11 +482,10 @@ def build_fps_xml(root: ET.Element, extract_dir: str,
         lines.append(f'    <sample_input><![CDATA[{sample_in}]]></sample_input>')
         lines.append(f'    <sample_output><![CDATA[{sample_out}]]></sample_output>')
 
-    # 测试数据（排除样例）
-    sample_set = set(samples)
+    # 测试数据
+    # 注意：与样例内容相同的测试点也要导出 —— Polygon 里标了 sample 的那一组
+    # 本身就是测试点 1，丢掉它会让判题点变少（且不同包导出结果不一致）
     for test_in, test_out in all_tests:
-        if (test_in, test_out) in sample_set:
-            continue
         lines.append(f'    <test_input><![CDATA[{test_in}]]></test_input>')
         lines.append(f'    <test_output><![CDATA[{test_out}]]></test_output>')
 
@@ -508,7 +503,8 @@ def build_fps_xml(root: ET.Element, extract_dir: str,
 
 def convert(polygon_zip: str, output_fps: Optional[str] = None,
             progress_callback=None,
-            max_test_data_mb: float = 0) -> str:
+            max_test_data_mb: float = 0,
+            generate_tests: bool = True) -> str:
     """
     主转换函数。
 
@@ -517,6 +513,8 @@ def convert(polygon_zip: str, output_fps: Optional[str] = None,
         output_fps: 输出的 FPS XML 文件路径
         progress_callback: 进度回调函数，接收 (stage, message) 参数
         max_test_data_mb: 测试数据大小上限（MB），0 表示不限制
+        generate_tests: 包内缺失的测试点（生成器生成的输入、主标程算出的答案）
+            是否现场动态生成，默认开启
 
     Returns:
         输出文件路径
@@ -537,9 +535,14 @@ def convert(polygon_zip: str, output_fps: Optional[str] = None,
         root = parse_problem_xml(tmp_dir)
 
         if progress_callback:
-            progress_callback(50, '正在构建 FPS XML...')
+            progress_callback(50, '正在准备测试数据...')
 
-        fps_xml = build_fps_xml(root, tmp_dir, max_test_data_mb)
+        def log(message: str) -> None:
+            if progress_callback:
+                progress_callback(60, message)
+
+        fps_xml = build_fps_xml(root, tmp_dir, max_test_data_mb,
+                                log=log, generate_tests=generate_tests)
 
         if output_fps is None:
             base_name = os.path.splitext(os.path.basename(polygon_zip))[0]

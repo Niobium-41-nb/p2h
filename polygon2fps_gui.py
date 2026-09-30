@@ -22,6 +22,16 @@ from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj,
                               HojOptions, HOJ_LANGUAGES, HOJ_DIFFICULTIES)
 
 
+def _log_tag(stage, message: str) -> str:
+    """根据进度回调内容选择日志颜色（错误 / 警告 / 普通）"""
+    if stage is not None and stage < 0:
+        return 'error'
+    text = message or ''
+    if text.startswith('⚠') or text.startswith('[警告]'):
+        return 'warn'
+    return 'info'
+
+
 class Polygon2FPSApp:
     """Polygon → FPS / Hydro / HOJ 转换 GUI 应用程序（支持批量转换）"""
 
@@ -475,6 +485,8 @@ class Polygon2FPSApp:
         self._log(f'输出格式: {fmt_name}', 'info')
         self._log(f'文件总数: {len(self.input_files)}', 'info')
         self._log(f'输出目录: {out_dir}', 'info')
+        self._log('测试数据: Polygon 的生成型测试点会用包内生成器动态生成，'
+                  '答案由 tag="main" 的主标程算出', 'info')
         self._log('-' * 56, 'info')
 
         # 解析测试数据大小限制
@@ -586,15 +598,29 @@ class Polygon2FPSApp:
             try:
                 if fmt == 'fps':
                     out_path = os.path.join(out_dir, f'{base_name}.fps.xml')
-                    convert_to_fps(file_path, out_path, max_test_data_mb=max_mb)
+
+                    def cb(stage, message):
+                        self.root.after(0, self._log, f'  {message}',
+                                        _log_tag(stage, message))
+
+                    convert_to_fps(file_path, out_path, progress_callback=cb,
+                                   max_test_data_mb=max_mb)
                     self.root.after(0, self._log,
                                     f'  ✅ [{idx + 1}/{total}] {file_name} → {base_name}.fps.xml', 'success')
                 elif fmt == 'hoj':
-                    out_path = convert_to_hoj(file_path, out_dir, hoj_options)
+                    def cb(stage, message):
+                        self.root.after(0, self._log, f'  {message}',
+                                        _log_tag(stage, message))
+
+                    out_path = convert_to_hoj(file_path, out_dir, hoj_options, cb)
                     self.root.after(0, self._log,
                                     f'  ✅ [{idx + 1}/{total}] {file_name} → {os.path.basename(out_path)}', 'success')
                 else:  # hydro
-                    convert_to_hydro(file_path, out_dir)
+                    def cb(stage, message):
+                        self.root.after(0, self._log, f'  {message}',
+                                        _log_tag(stage, message))
+
+                    convert_to_hydro(file_path, out_dir, cb)
                     self.root.after(0, self._log,
                                     f'  ✅ [{idx + 1}/{total}] {file_name} → Hydro 格式', 'success')
 

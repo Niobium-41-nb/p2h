@@ -28,6 +28,12 @@ Polygon Codeforces → FPS (Fresh Problem Set) / Hydro / HOJ 格式转换工具
     python polygon2fps.py hydro hzau-2026-problem1-20linux.zip ./hydro_problems
     python polygon2fps.py hoj hzau-2026-problem1-20linux.zip -o ./hoj_problems
     python polygon2fps.py hoj a.zip b.zip -o out.zip --merge --author admin --type oi
+
+说明:
+    Polygon 包里的测试数据并不全是静态上传的：method="generated" 的测试点只有
+    生成命令（如 gen -T 10000 ...），需要运行包内生成器才能得到输入；所有测试点的
+    答案也要靠主标程（solution tag="main"）算出来。转换时会自动复刻 Polygon 的
+    doall 流程动态生成这些数据（优先用包内预编译二进制，缺失时用本机 g++ 编译源码）。
 """
 
 import sys
@@ -44,6 +50,14 @@ def print_usage():
 
 
 def main():
+    # Windows 控制台默认是 GBK，打印 ⚠/❌ 这类字符会抛 UnicodeEncodeError，
+    # 这里退化为 '?'，保证中文与错误信息本身能正常输出
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except (AttributeError, ValueError):
+            pass
+
     if len(sys.argv) == 1:
         # 无参数 → 启动 GUI
         try:
@@ -69,8 +83,12 @@ def main():
             polygon_zip = sys.argv[2]
             output_fps = sys.argv[3] if len(sys.argv) > 3 else None
 
+            def log(stage, message):
+                if stage >= 0:
+                    print(f'  {message}')
+
             try:
-                result = convert(polygon_zip, output_fps)
+                result = convert(polygon_zip, output_fps, progress_callback=log)
                 size = os.path.getsize(result)
                 print(f'转换完成!')
                 print(f'  输出文件: {result}')
@@ -91,8 +109,12 @@ def main():
             polygon_zip = sys.argv[2]
             output_dir = sys.argv[3]
 
+            def log(stage, message):
+                if stage >= 0:
+                    print(f'  {message}')
+
             try:
-                result = convert_to_hydro(polygon_zip, output_dir)
+                result = convert_to_hydro(polygon_zip, output_dir, progress_callback=log)
                 size = os.path.getsize(result)
                 print(f'转换完成!')
                 print(f'  输出文件: {result}')
@@ -140,6 +162,8 @@ def run_hoj_cli(args):
     parser.add_argument('--tags', default='', help='标签，逗号分隔')
     parser.add_argument('--problem-id', default='', help='题目展示 ID（默认使用 Polygon short-name）')
     parser.add_argument('--max-mb', type=float, default=0, help='测试数据大小上限（MB），0 = 不限制')
+    parser.add_argument('--no-generate-tests', dest='generate_tests', action='store_false',
+                        help='不现场生成缺失的测试点（默认会用包内生成器与主标程动态生成）')
 
     ns = parser.parse_args(args)
 
@@ -165,12 +189,12 @@ def run_hoj_cli(args):
         tags=[t for t in re.split(r'[,，]', ns.tags) if t.strip()],
         problem_id=ns.problem_id,
         max_test_data_mb=ns.max_mb,
+        generate_tests=ns.generate_tests,
     )
 
     def log(stage, message):
-        if stage < 0:
-            print(f'  ❌ {message}')
-        else:
+        # stage < 0 时核心还会抛异常，由下面的 except 统一打印，避免重复
+        if stage >= 0:
             print(f'  {message}')
 
     try:

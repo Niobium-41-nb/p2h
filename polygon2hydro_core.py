@@ -22,6 +22,8 @@ import shutil
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Tuple, Callable
 
+from polygon_tests import load_test_data, failure_message
+
 
 # ========== 复用 polygon2fps_core 的通用函数 ==========
 
@@ -231,30 +233,19 @@ def get_hydro_samples(extract_dir: str, lang: str = 'chinese') -> List[Tuple[str
     return samples
 
 
-def get_hydro_all_tests(extract_dir: str, root: ET.Element) -> List[Tuple[str, str]]:
-    """获取所有测试数据"""
-    tests_dir = os.path.join(extract_dir, 'tests')
-    tests = []
+def get_hydro_all_tests(extract_dir: str, root: ET.Element, log=None,
+                        generate_tests: bool = True) -> List[Tuple[bytes, bytes]]:
+    """获取所有测试数据（返回原始字节，保证与 Polygon 判题结果一致）
 
-    if not os.path.isdir(tests_dir):
-        return tests
-
-    testset = root.find('.//testset')
-    test_count = 0
-    if testset is not None:
-        tc = testset.find('test-count')
-        if tc is not None and tc.text:
-            test_count = int(tc.text)
-
-    for i in range(1, test_count + 1):
-        input_file = os.path.join(tests_dir, f'{i:02d}')
-        output_file = os.path.join(tests_dir, f'{i:02d}.a')
-        inp = get_text_content(input_file)
-        out = get_text_content(output_file)
-        if inp is not None:
-            tests.append((inp.strip(), out.strip() if out else ''))
-
-    return tests
+    Polygon 的生成型测试点（method="generated"）需要运行生成器才能得到输入、
+    运行主标程才能得到答案，这部分由 polygon_tests 自动完成。
+    """
+    result = load_test_data(extract_dir, root, generate=generate_tests, log=log)
+    if result.test_count and not result.tests:
+        raise ValueError(failure_message(result))
+    if log:
+        log(result.summary())
+    return [(t.input, t.answer) for t in result.tests]
 
 
 def build_problem_md(info: dict, description: str) -> str:
@@ -286,7 +277,8 @@ def build_problem_md(info: dict, description: str) -> str:
 
 
 def convert_to_hydro(polygon_zip: str, output_dir: str,
-                     progress_callback: Optional[Callable] = None) -> str:
+                     progress_callback: Optional[Callable] = None,
+                     generate_tests: bool = True) -> str:
     """
     将 Polygon 格式题目转换为 Hydro 格式。
 
@@ -294,6 +286,8 @@ def convert_to_hydro(polygon_zip: str, output_dir: str,
         polygon_zip: polygon.codeforces 格式的 zip 文件路径
         output_dir: 输出目录（每个题目会创建子目录）
         progress_callback: 进度回调函数
+        generate_tests: 包内缺失的测试点（生成器生成的输入、主标程算出的答案）
+            是否现场动态生成，默认开启
 
     Returns:
         输出目录路径
@@ -335,19 +329,24 @@ def convert_to_hydro(polygon_zip: str, output_dir: str,
             f.write(problem_md)
 
         if progress_callback:
-            progress_callback(60, '正在复制测试数据...')
+            progress_callback(60, '正在准备测试数据...')
 
-        # 复制测试数据
+        def log(message: str) -> None:
+            if progress_callback:
+                progress_callback(60, message)
+
+        # 读取测试数据（包内缺失的生成型测试点会现场运行生成器与主标程）
+        all_tests = get_hydro_all_tests(tmp_dir, root, log=log,
+                                        generate_tests=generate_tests)
+
         testdata_dir = os.path.join(problem_dir, 'testdata')
         os.makedirs(testdata_dir, exist_ok=True)
 
-        all_tests = get_hydro_all_tests(tmp_dir, root)
         for i, (inp, out) in enumerate(all_tests, start=1):
-            in_path = os.path.join(testdata_dir, f'{i}.in')
-            out_path = os.path.join(testdata_dir, f'{i}.out')
-            with open(in_path, 'w', encoding='utf-8') as f:
+            # 按原始字节写入，保留结尾空格与换行
+            with open(os.path.join(testdata_dir, f'{i}.in'), 'wb') as f:
                 f.write(inp)
-            with open(out_path, 'w', encoding='utf-8') as f:
+            with open(os.path.join(testdata_dir, f'{i}.out'), 'wb') as f:
                 f.write(out)
 
         if progress_callback:

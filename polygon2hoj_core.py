@@ -30,6 +30,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Callable, Dict
 
+from polygon_tests import load_test_data, failure_message
+
 
 # ========== HOJ 相关常量 ==========
 
@@ -91,6 +93,7 @@ class HojOptions:
     languages: List[str] = field(default_factory=lambda: list(HOJ_LANGUAGES))
     problem_id: str = ''                  # 题目展示 ID（留空则使用 Polygon short-name）
     max_test_data_mb: float = 0           # 测试数据大小上限（MB），0 = 不限制
+    generate_tests: bool = True           # 包内缺失的测试点是否现场动态生成（跑生成器 + 主标程）
 
     def normalized(self) -> 'HojOptions':
         """返回一个字段取值合法的副本"""
@@ -104,6 +107,7 @@ class HojOptions:
             languages=[l.strip() for l in (self.languages or []) if l and l.strip()] or list(HOJ_LANGUAGES),
             problem_id=(self.problem_id or '').strip(),
             max_test_data_mb=self.max_test_data_mb if self.max_test_data_mb and self.max_test_data_mb > 0 else 0,
+            generate_tests=bool(self.generate_tests),
         )
         return opts
 
@@ -129,14 +133,6 @@ def get_text_content(file_path: str) -> str:
     if not os.path.isfile(file_path):
         return ''
     with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-        return f.read()
-
-
-def _read_bytes(file_path: str) -> bytes:
-    """按二进制读取文件（保留原始换行/结尾空格）"""
-    if not os.path.isfile(file_path):
-        return b''
-    with open(file_path, 'rb') as f:
         return f.read()
 
 
@@ -372,41 +368,24 @@ def build_examples_html(examples: List[Tuple[str, str]]) -> str:
     return ''.join(parts)
 
 
-def _format_mb(value: float) -> str:
-    """把 MB 数值格式化成易读的字符串（50 → 50，0.5 → 0.5，1e-5 → 0.00001）"""
-    text = f'{value:.6f}'.rstrip('0').rstrip('.')
-    return text or '0'
+def get_all_tests(extract_dir: str, root: ET.Element, max_test_data_mb: float = 0,
+                  warn: Optional[Callable[[str], None]] = None,
+                  generate_tests: bool = True,
+                  log: Optional[Callable[[str], None]] = None) -> List[Tuple[bytes, bytes]]:
+    """读取全部测试数据（返回原始字节，保证与评测文件完全一致）
 
-
-def get_all_tests(extract_dir: str, max_test_data_mb: float = 0,
-                  warn: Optional[Callable[[str], None]] = None) -> List[Tuple[bytes, bytes]]:
-    """读取 tests/ 下的全部测试数据（返回原始字节，保证与评测文件完全一致）"""
-    tests_dir = os.path.join(extract_dir, 'tests')
-    tests: List[Tuple[bytes, bytes]] = []
-    if not os.path.isdir(tests_dir):
-        return tests
-
-    names = [f for f in os.listdir(tests_dir) if re.match(r'^\d+$', f)]
-    names.sort(key=lambda x: int(x))
-    if not names:
-        return tests
-
+    Polygon 包里的测试数据是「用生成器（gen）动态生成 + 用主标程算答案」得到的，
+    压缩包中不一定静态存放；缺失部分由 polygon_tests 现场生成。
+    """
     limit = int(max_test_data_mb * 1024 * 1024) if max_test_data_mb and max_test_data_mb > 0 else 0
-    used = 0
-    for name in names:
-        in_data = _read_bytes(os.path.join(tests_dir, name))
-        out_data = _read_bytes(os.path.join(tests_dir, name + '.a'))
-        if limit:
-            size = len(in_data) + len(out_data)
-            # 至少保留第一组，避免出现"评测数据为空"而无法导入
-            if tests and used + size > limit:
-                if warn:
-                    warn(f'测试数据超过 {_format_mb(max_test_data_mb)} MB 上限，'
-                         f'已截断为 {len(tests)} 组')
-                break
-            used += size
-        tests.append((in_data, out_data))
-    return tests
+    result = load_test_data(extract_dir, root, generate=generate_tests, log=log,
+                            max_total_bytes=limit)
+    if warn:
+        for message in result.warnings:
+            warn(message)
+    if result.test_count and not result.tests:
+        raise ValueError(failure_message(result))
+    return [(t.input, t.answer) for t in result.tests]
 
 
 # ========== HOJ 题目构建 ==========
@@ -525,14 +504,15 @@ def _build_problem_data(polygon_zip: str, options: HojOptions,
         sections = build_hoj_sections(tmp_dir, root, lang)
         examples = get_examples(tmp_dir, lang)
 
-        report(0.65, '正在读取测试数据...')
-        tests = get_all_tests(tmp_dir, options.max_test_data_mb,
-                              warn=lambda m: warnings.append(m))
+        report(0.65, '正在准备测试数据...')
+
+        # 生成过程的日志（含警告）由 log 回调输出，warn 只负责把警告收集进 stat
+        tests = get_all_tests(tmp_dir, root, options.max_test_data_mb,
+                              warn=warnings.append,
+                              generate_tests=options.generate_tests,
+                              log=lambda m: report(0.65, m))
         if not tests:
-            raise ValueError('未在压缩包中找到任何测试数据（tests/ 目录为空）')
-        for w in warnings:
-            if progress_callback:
-                progress_callback(start + int(span * 0.65), f'⚠ {w}')
+            raise ValueError('未在压缩包中找到任何测试数据')
 
         report(0.8, '正在生成题目数据...')
         data = build_problem_json(info, sections, build_examples_html(examples), tests, options)
