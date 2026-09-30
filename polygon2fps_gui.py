@@ -353,22 +353,38 @@ class Polygon2FPSApp:
         self.log_text.configure(state='disabled')
         self.root.update_idletasks()
 
-    def _update_file_count(self):
+    def _update_file_count(self, missing: int = 0):
         """更新文件数量显示"""
         count = len(self.input_files)
-        self.count_label.configure(text=f"共 {count} 个文件")
+        text = f"共 {count} 个文件"
+        if missing:
+            text += f"（其中 {missing} 个文件已不存在，请移除后重试）"
+        self.count_label.configure(text=text, foreground='#f44747' if missing else 'gray')
         self.clear_btn.configure(state='normal' if count > 0 else 'disabled')
         self.remove_btn.configure(state='disabled')
 
     def _refresh_file_list(self):
-        """刷新文件列表显示"""
+        """刷新文件列表显示
+
+        列表里的文件可能已被移动或删除（比如选完文件后又把它挪走），
+        这里必须容错，否则 os.path.getsize 会直接抛 FileNotFoundError。
+        """
         self.file_listbox.delete(0, tk.END)
+        missing = 0
         for i, f in enumerate(self.input_files, start=1):
             name = os.path.basename(f)
-            size = os.path.getsize(f)
-            size_str = self._format_size(size)
-            self.file_listbox.insert(tk.END, f"  {i:3d}. {name}  ({size_str})")
-        self._update_file_count()
+            try:
+                size_str = self._format_size(os.path.getsize(f))
+                text = f"  {i:3d}. {name}  ({size_str})"
+                is_missing = False
+            except OSError:
+                missing += 1
+                text = f"  {i:3d}. {name}  (文件不存在)"
+                is_missing = True
+            self.file_listbox.insert(tk.END, text)
+            if is_missing:
+                self.file_listbox.itemconfig(tk.END, foreground='#f44747')
+        self._update_file_count(missing)
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
@@ -412,8 +428,14 @@ class Polygon2FPSApp:
         if not folder:
             return
 
+        try:
+            entries = sorted(os.listdir(folder))
+        except OSError as exc:
+            messagebox.showerror("错误", f"无法读取文件夹:\n{folder}\n\n{exc}")
+            return
+
         added = 0
-        for f in sorted(os.listdir(folder)):
+        for f in entries:
             if f.lower().endswith('.zip'):
                 full_path = os.path.join(folder, f)
                 if full_path not in self.input_files:
@@ -455,6 +477,17 @@ class Polygon2FPSApp:
         """开始批量转换"""
         if not self.input_files:
             messagebox.showwarning("提示", "请先添加要转换的 ZIP 文件")
+            return
+
+        # 文件可能在加入列表后被移动/删除，这里先备一次，避免转到一半才报错
+        missing = [f for f in self.input_files if not os.path.isfile(f)]
+        if missing:
+            self._refresh_file_list()
+            preview = '\n'.join(os.path.basename(f) for f in missing[:5])
+            if len(missing) > 5:
+                preview += f'\n...（共 {len(missing)} 个）'
+            self._log(f'❌ 以下文件已不存在，请从列表移除后重试：\n{preview}', 'error')
+            messagebox.showerror("错误", f"以下文件已不存在，请从列表移除后重试:\n\n{preview}")
             return
 
         out_dir = self.output_dir.get()

@@ -4,6 +4,19 @@
 
 ## 快速开始
 
+### 开箱即用（Windows，无需装 Python）
+
+到 [Releases](https://github.com/Niobium-41-nb/p2h/releases) 下载：
+
+| 文件 | 用途 |
+|------|------|
+| `Polygon2FPS-v1.0.0.exe` | **图形界面版**，双击即用（无控制台窗口） |
+| `Polygon2FPS-CLI-v1.0.0.exe` | 命令行版，用法同 `python polygon2fps.py <fps|hydro|hoj> ...` |
+
+> 两个 exe 都是单文件绿色版（约 11.5 MB），首次启动会自解压到临时目录，稍等一下。
+> 动态生成测试数据需要本机有 C++ 编译器（`g++`），仅当包里缺失生成型测试点数据时才会用到；
+> 有预编译二进制的包（Standard / Windows 包）不需要编译器。
+
 ### 图形界面（推荐）
 
 ```bash
@@ -48,6 +61,17 @@ HOJ 子命令参数：
 | `--problem-id` | 题目展示 ID（默认使用 Polygon `short-name`） |
 | `--max-mb` | 测试数据大小上限（MB），`0` = 不限制 |
 | `--no-generate-tests` | 不动态生成缺失的测试点（默认会自动生成，见下文） |
+
+### 自行打包 exe
+
+```bash
+pip install pyinstaller
+python build_exe.py                  # 同时打包 GUI 版与 CLI 版（版本号默认 1.0.0）
+python build_exe.py --version 1.2.3  # 指定版本号（写进文件名）
+python build_exe.py --cli-only       # 只要命令行版
+```
+
+产物在 `dist/`，用 `--onedir` 可改成目录版（启动更快，但要整个目录一起分发）。
 
 ### HOJ 难度对照表（二次开发版）
 
@@ -133,6 +157,7 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 ├── polygon2hydro_core.py       # Hydro 核心转换逻辑
 ├── polygon2hoj_core.py         # HOJ 核心转换逻辑
 ├── polygon_tests.py            # 测试数据加载 / 动态生成（三个 core 共用）
+├── build_exe.py                # 一键打包为 Windows exe（PyInstaller）
 ├── README.md                   # 本文件
 └── .gitignore
 ```
@@ -149,6 +174,7 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 - ✅ **LaTeX 处理** — 数学公式原样保留给 KaTeX 渲染，正文 LaTeX 命令转为 Markdown
 - ✅ **CDATA 安全** — FPS 格式使用 `<![CDATA[...]]>` 包裹，避免 XML 转义问题
 - ✅ **标准兼容** — 输出符合 FPS 1.2、Hydro 导入规范与 HOJ 导入规范
+- ✅ **开箱即用** — 提供单文件 Windows exe（GUI 版 + CLI 版），无需安装 Python
 
 ## 输出格式说明
 

@@ -49,14 +49,30 @@ def print_usage():
     print(__doc__)
 
 
-def main():
-    # Windows 控制台默认是 GBK，打印 ⚠/❌ 这类字符会抛 UnicodeEncodeError，
-    # 这里退化为 '?'，保证中文与错误信息本身能正常输出
-    for stream in (sys.stdout, sys.stderr):
+def _prepare_console_streams():
+    """让输出流在各种运行方式下都不至于崩溃
+
+    * 打包成无控制台的 exe（PyInstaller --windowed）时 sys.stdout / sys.stderr 为 None，
+      此时 print 会报错 —— 换成 devnull，输出安静丢弃；
+    * Windows 控制台默认 GBK，打印 ⚠/❌ 这类字符会抛 UnicodeEncodeError —— 退化为 '?'，
+      保证中文与错误信息本身正常输出。
+    """
+    for name in ('stdout', 'stderr'):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            try:
+                setattr(sys, name, open(os.devnull, 'w', encoding='utf-8'))
+            except OSError:
+                pass
+            continue
         try:
             stream.reconfigure(errors='replace')
         except (AttributeError, ValueError):
             pass
+
+
+def main():
+    _prepare_console_streams()
 
     if len(sys.argv) == 1:
         # 无参数 → 启动 GUI
