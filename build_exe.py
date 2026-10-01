@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENTRY = 'polygon2fps.py'
