@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 from typing import Optional, List, Tuple, Callable
 
 from polygon_tests import load_test_data, failure_message
+import polygon_statement
 
 
 # ========== 复用 polygon2fps_core 的通用函数 ==========
@@ -50,26 +51,8 @@ def get_text_content(file_path: str) -> str:
 
 
 def tex_to_plain_text(tex_content: str) -> str:
-    """将 LaTeX 内容转换为纯文本"""
-    text = tex_content
-    text = re.sub(r'(?<!\\)%.*', '', text)
-    text = text.replace('\\ldots', '...')
-    text = text.replace('\\mid', '|')
-    text = text.replace('\\&', '&')
-    text = text.replace('\\cdot', '·')
-    text = text.replace('\\le', '≤')
-    text = text.replace('\\ge', '≥')
-    text = text.replace('\\lt', '<')
-    text = text.replace('\\gt', '>')
-    text = text.replace('\\times', '×')
-    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\textbf\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\textit\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\texttt\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\$\$\$', '$', text)
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    text = text.strip()
-    return text
+    """将 LaTeX 内容转换为纯文本（数学公式降级为 Unicode）"""
+    return polygon_statement.tex_to_plain_text(tex_content)
 
 
 def html_to_plain_text(html_content: str) -> str:
@@ -89,30 +72,8 @@ def html_to_plain_text(html_content: str) -> str:
 
 
 def tex_to_markdown(tex_content: str) -> str:
-    """将 LaTeX 内容转换为 Markdown（保留数学公式）"""
-    text = tex_content
-    # 移除 LaTeX 注释
-    text = re.sub(r'(?<!\\)%.*', '', text)
-    # 转换常用命令
-    text = text.replace('\\ldots', '...')
-    text = text.replace('\\mid', '|')
-    text = text.replace('\\&', '&')
-    text = text.replace('\\cdot', '·')
-    text = text.replace('\\le', '≤')
-    text = text.replace('\\ge', '≥')
-    text = text.replace('\\lt', '<')
-    text = text.replace('\\gt', '>')
-    text = text.replace('\\times', '×')
-    # 文本命令
-    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
-    text = re.sub(r'\\textbf\{([^}]*)\}', r'**\1**', text)
-    text = re.sub(r'\\textit\{([^}]*)\}', r'*\1*', text)
-    text = re.sub(r'\\texttt\{([^}]*)\}', r'`\1`', text)
-    # 将 $$...$$ 或 $...$ 保留为 LaTeX 数学公式（Markdown 兼容）
-    # 清理多余空行
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    text = text.strip()
-    return text
+    """将 LaTeX 内容转换为 Markdown（数学公式原样保留，供 KaTeX 渲染）"""
+    return polygon_statement.tex_to_markdown(tex_content)
 
 
 # ========== Hydro 特定函数 ==========

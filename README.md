@@ -58,7 +58,7 @@ HOJ 子命令参数：
 | `--difficulty` | 难度：`0`~`8`（默认 `0`），见下方难度对照表 |
 | `--judge-case-mode` | 用例模式：`default`（默认）/ `ergodic_without_error` / `subtask_lowest` / `subtask_average` |
 | `--tags` | 标签，逗号分隔 |
-| `--problem-id` | 题目展示 ID（默认使用 Polygon `short-name`） |
+| `--problem-id` | 题目展示 ID（默认留空，由 HOJ 导入时自动分配 `P<id>`） |
 | `--max-mb` | 测试数据大小上限（MB），`0` = 不限制 |
 | `--no-generate-tests` | 不动态生成缺失的测试点（默认会自动生成，见下文） |
 
@@ -156,7 +156,10 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 ├── polygon2fps_gui.py          # 图形用户界面（基于 tkinter）
 ├── polygon2hydro_core.py       # Hydro 核心转换逻辑
 ├── polygon2hoj_core.py         # HOJ 核心转换逻辑
+├── polygon_statement.py        # LaTeX 题面 → Markdown / 纯文本（三个 core 共用）
 ├── polygon_tests.py            # 测试数据加载 / 动态生成（三个 core 共用）
+├── polygon_statement_tests.py  # 题面转换回归测试（python polygon_statement_tests.py）
+├── polygon2hoj_core_tests.py   # HOJ 展示 ID 等回归测试（python polygon2hoj_core_tests.py）
 ├── build_exe.py                # 一键打包为 Windows exe（PyInstaller）
 ├── README.md                   # 本文件
 └── .gitignore
@@ -171,7 +174,9 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 - ✅ **命令行支持** — 适合批量处理或集成到脚本
 - ✅ **完整转换** — 题目名称、描述、输入/输出格式、样例、测试数据
 - ✅ **测试数据动态生成** — 包内缺失的生成型测试点会用生成器 + 主标程现场生成（同 Polygon 的 doall）
-- ✅ **LaTeX 处理** — 数学公式原样保留给 KaTeX 渲染，正文 LaTeX 命令转为 Markdown
+- ✅ **LaTeX 处理** — 数学公式原样保留给 KaTeX 渲染，正文 LaTeX 命令转为 Markdown；
+  段落内的软换行折叠为空格（LaTeX 语义），避免 HOJ / Hydro 前端 `breaks:true` 把
+  每个 `$公式$` 顶到单独一行；符号替换最长匹配优先，不会出现 `\leq` → `≤q` 这类残缺
 - ✅ **CDATA 安全** — FPS 格式使用 `<![CDATA[...]]>` 包裹，避免 XML 转义问题
 - ✅ **标准兼容** — 输出符合 FPS 1.2、Hydro 导入规范与 HOJ 导入规范
 - ✅ **开箱即用** — 提供单文件 Windows exe（GUI 版 + CLI 版），无需安装 Python
@@ -228,7 +233,7 @@ JSON 字段映射：
 | JSON 字段 | 说明 | 来源 |
 |-----------|------|------|
 | `problem.title` | 题目标题 | `problem.xml` → `<name language="chinese">` |
-| `problem.problemId` | 题目展示 ID | Polygon `short-name`（可在界面/`--problem-id` 中覆盖） |
+| `problem.problemId` | 题目展示 ID | **默认留空**（JSON 里不写该字段，HOJ 导入时按自增 id 自动分配 `P<id>`）；界面「展示 ID」/`--problem-id` 指定时才写入 |
 | `problem.description` | 题目描述（Markdown） | `statement-sections/*/legend.tex` |
 | `problem.input` / `problem.output` | 输入/输出格式 | `input.tex` / `output.tex` |
 | `problem.hint` | 题目提示 | `notes.tex` |

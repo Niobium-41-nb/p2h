@@ -334,7 +334,7 @@ class Polygon2FPSApp:
         elif fmt == 'hydro':
             hint = "每个题目将创建独立目录并打包为 {题目名}.zip"
         else:
-            hint = "每个题目生成 {题目ID}.hoj.zip；勾选“合并为单个 ZIP”时输出 hoj_batch_时间戳.zip"
+            hint = "每个题目生成 {题目短名}.hoj.zip（填了展示 ID 则用 ID）；勾选“合并为单个 ZIP”时输出 hoj_batch_时间戳.zip"
         self.output_hint_label.configure(text=hint)
 
         # 显示/隐藏与格式相关的选项面板

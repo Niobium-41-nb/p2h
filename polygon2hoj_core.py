@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Callable, Dict
 
 from polygon_tests import load_test_data, failure_message
+import polygon_statement
 
 
 # ========== HOJ 相关常量 ==========
@@ -91,7 +92,7 @@ class HojOptions:
     judge_case_mode: str = 'default'      # 用例模式
     tags: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=lambda: list(HOJ_LANGUAGES))
-    problem_id: str = ''                  # 题目展示 ID（留空则使用 Polygon short-name）
+    problem_id: str = ''                  # 题目展示 ID（留空则交给 HOJ 导入时自动分配 P<id>）
     max_test_data_mb: float = 0           # 测试数据大小上限（MB），0 = 不限制
     generate_tests: bool = True           # 包内缺失的测试点是否现场动态生成（跑生成器 + 主标程）
 
@@ -152,104 +153,17 @@ def html_to_plain_text(html_content: str) -> str:
     return text.strip()
 
 
-# LaTeX 命令 → Unicode（题面中常见的符号）
-_TEX_SYMBOLS = [
-    ('\\Longleftrightarrow', '↔'), ('\\Longrightarrow', '⇒'), ('\\Longleftarrow', '⇐'),
-    ('\\longrightarrow', '→'), ('\\longleftarrow', '←'), ('\\leftrightarrow', '↔'),
-    ('\\rightarrow', '→'), ('\\leftarrow', '←'), ('\\Rightarrow', '⇒'), ('\\Leftarrow', '⇐'),
-    ('\\uparrow', '↑'), ('\\downarrow', '↓'), ('\\Uparrow', '⇑'), ('\\Downarrow', '⇓'),
-    ('\\mapsto', '↦'), ('\\to', '→'), ('\\gets', '←'),
-    ('\\leqslant', '≤'), ('\\geqslant', '≥'), ('\\le', '≤'), ('\\ge', '≥'),
-    ('\\ll', '≪'), ('\\gg', '≫'), ('\\neq', '≠'), ('\\ne', '≠'), ('\\equiv', '≡'),
-    ('\\approx', '≈'), ('\\cong', '≅'), ('\\sim', '∼'), ('\\propto', '∝'), ('\\mid', '|'),
-    ('\\parallel', '∥'), ('\\perp', '⊥'), ('\\lt', '<'), ('\\gt', '>'),
-    ('\\notin', '∉'), ('\\subseteq', '⊆'), ('\\supseteq', '⊇'), ('\\subset', '⊂'),
-    ('\\supset', '⊃'), ('\\cup', '∪'), ('\\cap', '∩'), ('\\setminus', '∖'),
-    ('\\varnothing', '∅'), ('\\emptyset', '∅'), ('\\in', '∈'), ('\\ni', '∋'),
-    ('\\times', '×'), ('\\div', '÷'), ('\\pm', '±'), ('\\mp', '∓'), ('\\cdot', '·'),
-    ('\\ast', '*'), ('\\star', '★'), ('\\circ', '°'), ('\\bullet', '•'),
-    ('\\oplus', '⊕'), ('\\otimes', '⊗'), ('\\odot', '⊙'),
-    ('\\forall', '∀'), ('\\exists', '∃'), ('\\lnot', '¬'), ('\\land', '∧'), ('\\lor', '∨'),
-    ('\\ldots', '...'), ('\\dots', '...'), ('\\cdots', '...'), ('\\vdots', '⋮'), ('\\ddots', '⋱'),
-    ('\\infty', '∞'), ('\\partial', '∂'), ('\\nabla', '∇'), ('\\prime', '′'), ('\\degree', '°'),
-    ('\\angle', '∠'), ('\\triangle', '△'), ('\\surd', '√'), ('\\ell', 'ℓ'), ('\\hbar', 'ħ'),
-    ('\\lfloor', '⌊'), ('\\rfloor', '⌋'), ('\\lceil', '⌈'), ('\\rceil', '⌉'),
-    ('\\P', '¶'), ('\\S', '§'),
-]
-
-
-# 数学模式片段：$$...$$ / \[...\] / \(...\) / $...$
-_MATH_RE = re.compile(r'(\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|\$[^$\n]*?\$)', re.DOTALL)
-
-
-def _tex_to_markdown_text(text: str) -> str:
-    """处理**非数学模式**的 LaTeX 片段（数学公式由 KaTeX 渲染，不做任何改动）"""
-    # 1. 转义字符（必须放在通用命令清除之前）
-    text = (text.replace('\\&', '&').replace('\\%', '%').replace('\\$', '$')
-                .replace('\\#', '#').replace('\\_', '_')
-                .replace('\\{', '{').replace('\\}', '}'))
-
-    # 2. 章节命令 → Markdown 标题
-    text = re.sub(r'\\section\*?\{([^}]*)\}', r'\n## \1\n', text)
-    text = re.sub(r'\\subsection\*?\{([^}]*)\}', r'\n### \1\n', text)
-    text = re.sub(r'\\subsubsection\*?\{([^}]*)\}', r'\n#### \1\n', text)
-
-    # 3. 列表环境 → Markdown 列表
-    text = re.sub(r'\\begin\{(?:itemize|enumerate|description)\}', '\n', text)
-    text = re.sub(r'\\end\{(?:itemize|enumerate|description)\}', '\n', text)
-    text = re.sub(r'\\item(?:\[[^\]]*\])?[ \t]*', '\n- ', text)
-
-    # 4. 其余环境标记（表格、居中、图片等）直接丢弃环境名
-    text = re.sub(r'\\begin\{[^}]*\}', '\n', text)
-    text = re.sub(r'\\end\{[^}]*\}', '\n', text)
-
-    # 5. 强调 / 等宽 / 文本命令 → Markdown
-    text = re.sub(r'\\texttt\{([^}]*)\}', r'`\1`', text)
-    text = re.sub(r'\\textbf\{([^}]*)\}', r'**\1**', text)
-    text = re.sub(r'\\emph\{([^}]*)\}', r'*\1*', text)
-    text = re.sub(r'\\textit\{([^}]*)\}', r'*\1*', text)
-    text = re.sub(r'\\textsc\{([^}]*)\}', r'\1', text)
-    for cmd in ('text', 'textrm', 'textnormal', 'mbox', 'hbox', 'mathrm', 'operatorname'):
-        text = re.sub(r'\\' + cmd + r'\{([^}]*)\}', r'\1', text)
-
-    # 6. 常见数学符号 → Unicode
-    for cmd, repl in _TEX_SYMBOLS:
-        text = text.replace(cmd, repl)
-
-    # 7. 换行
-    text = re.sub(r'\\\\[ \t]*(?:\n|$)', '\n', text)
-    text = re.sub(r'\\\\', '\n', text)
-    text = text.replace('\\newline', '\n').replace('\\par', '\n\n')
-
-    # 8. 清除剩余的未知命令（保留花括号）
-    text = re.sub(r'\\[a-zA-Z]+\*?', '', text)
-
-    # 9. 杂项清理
-    text = text.replace('~', ' ')
-    return text
-
+# ========== LaTeX 题面 → Markdown ==========
 
 def tex_to_markdown(tex_content: str) -> str:
-    """将 LaTeX 题面转换为 Markdown（数学公式原样保留，供 KaTeX 渲染）"""
-    text = tex_content
+    """将 LaTeX 题面转换为 Markdown（数学公式原样保留，供 KaTeX 渲染）
 
-    # 去掉 LaTeX 注释
-    text = re.sub(r'(?<!\\)%.*', '', text)
-
-    # 按数学模式切分，公式内部不做任何转换（\frac、\sum、\begin{cases} 等必须原样保留）
-    parts = _MATH_RE.split(text)
-    converted = []
-    for i, part in enumerate(parts):
-        if i % 2 == 1:                      # 奇数下标 = 数学公式
-            converted.append(part.replace('$$$', '$'))
-        else:
-            converted.append(_tex_to_markdown_text(part))
-    text = ''.join(converted)
-
-    text = re.sub(r'\$\$\$', '$', text)
-    text = re.sub(r'[ \t]+\n', '\n', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    转换规则集中在 polygon_statement.py：先按数学模式切分，数学公式原样保留，
+    只转换非数学部分；并把 LaTeX 的软换行折叠成空格——HOJ 前端的 markdown-it
+    开着 breaks:true，源文件里每个软换行都会被渲染成 <br>，不折叠的话每个
+    $公式$ 都会被顶到单独一行。
+    """
+    return polygon_statement.tex_to_markdown(tex_content)
 
 
 # ========== Polygon 数据提取 ==========
@@ -398,9 +312,14 @@ def _sanitize_key(name: str) -> str:
 
 
 def build_problem_id(info: dict, options: HojOptions) -> str:
-    """题目展示 ID（HOJ 要求唯一、非空、长度 ≤ 50）"""
-    pid = options.problem_id or info.get('short_name') or info.get('title') or 'problem'
-    return pid.strip()[:50] or 'problem'
+    """题目展示 ID：只取显式指定的值。
+
+    默认留空（转换出的 json 里不写 problemId），HOJ 导入时会以 problem 表自增 id
+    自动分配 P<id>。**不能写成空字符串**：HOJ 的 adminAddProblem 只在 problemId
+    为 null 时才自动分配，空串会走唯一性校验，导致同一批导入的第二个题目直接报
+    「problem_id [] already exists」。
+    """
+    return (options.problem_id or '').strip()[:50]
 
 
 def build_samples(tests: List[Tuple[bytes, bytes]], options: HojOptions) -> List[dict]:
@@ -425,10 +344,9 @@ def build_problem_json(info: dict, sections: Dict[str, str], examples_html: str,
     problem = {
         'auth': options.auth,
         'isRemote': False,
-        'problemId': build_problem_id(info, options),
         'description': sections['description'],
         'source': info.get('short_name') or '',
-        'title': (info.get('title') or build_problem_id(info, options))[:255],
+        'title': (info.get('title') or info.get('short_name') or '未命名题目')[:255],
         'type': options.problem_type,
         'timeLimit': info['time_limit_ms'],
         'memoryLimit': info['memory_limit_mb'],
@@ -449,6 +367,11 @@ def build_problem_json(info: dict, sections: Dict[str, str], examples_html: str,
         'ioReadFileName': None,
         'ioWriteFileName': None,
     }
+    # 展示 ID 默认留空：不写该字段时由 HOJ 导入时自动分配 P<id>。
+    # 只有显式指定（界面「展示 ID」/--problem-id）时才写入。
+    display_id = build_problem_id(info, options)
+    if display_id:
+        problem['problemId'] = display_id
     if options.author:
         problem['author'] = options.author
 
@@ -524,7 +447,8 @@ def _build_problem_data(polygon_zip: str, options: HojOptions,
 
         stat = {
             'title': info.get('title', ''),
-            'problem_id': data['problem']['problemId'],
+            # 展示 ID 默认留空；打包用的文件名/文件夹名退回 Polygon short-name
+            'problem_id': data['problem'].get('problemId') or info.get('short_name') or 'problem',
             'tests': len(tests),
             'samples': len(examples),
             'warnings': warnings,
