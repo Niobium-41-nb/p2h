@@ -12,6 +12,9 @@ Hydro 题目格式（目录结构）:
     │   ├── 2.in
     │   └── 2.out
     └── (可选) extra_files/
+
+交互题还会在 ``testdata/`` 下额外写入 ``config.yaml`` 与交互器源码
+（HOJ 的 Hydro 导入按 ``type: interactive`` + ``interactor: <相对 testdata 的路径>`` 识别）。
 """
 
 import os
@@ -20,9 +23,11 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
-from typing import Optional, List, Tuple, Callable
+from typing import Optional, List, Tuple, Callable, Dict
 
-from polygon_tests import load_test_data, failure_message
+from polygon_tests import (load_test_data, failure_message, detect_interactor,
+                           collect_interactor_extra_files, interactor_include_names,
+                           Interactor)
 import polygon_statement
 
 
@@ -209,6 +214,76 @@ def get_hydro_all_tests(extract_dir: str, root: ET.Element, log=None,
     return [(t.input, t.answer) for t in result.tests]
 
 
+# Hydro 交互题里的交互器文件名：HOJ 的 Hydro 导入按后缀认语言
+# （``interactor.cc`` → C++，其余 → C；写成 .cpp 会被当成 C 编译而失败）
+HYDRO_INTERACTOR_NAMES = {'C++': 'interactor.cc', 'C': 'interactor.c'}
+
+
+def build_hydro_interactive_config(extract_dir: str, interactor: Interactor,
+                                   time_limit_ms: int = 0, memory_limit_mb: int = 0,
+                                   log: Optional[Callable[[str], None]] = None
+                                   ) -> Tuple[str, Dict[str, bytes], List[str]]:
+    """为 Polygon 交互题生成 Hydro 的 ``testdata/config.yaml`` 与随包文件
+
+    只有把 ``config.yaml`` 里的 ``type`` 写成 ``interactive`` 并指向交互器源码，
+    Hydro / HOJ 的 Hydro 导入才会按交互判题处理；否则会退化成「普通判题 + 空输出」。
+
+    Returns:
+        ``(config.yaml 文本, {testdata 下的文件名: 内容}, 警告列表)``；
+        无法表达时 config 文本为空串（如 run-twice 的通信题）
+    """
+    warnings: List[str] = []
+
+    if interactor.is_communication:
+        warnings.append(
+            '这是 Polygon 的通信题（run-twice）：Hydro 的交互判题只会把选手程序跑一次，'
+            '无法表达「两次运行之间由通信器传递信息」的语义，已跳过 config.yaml；'
+            '建议改用 HOJ 格式导出（HOJ 的 communication 判题模式与 Polygon 一一对应）')
+        return '', {}, warnings
+
+    if not interactor.source:
+        warnings.append(f'压缩包里只有交互器的预编译二进制（{interactor.binary or "?"}）、没有源码，'
+                        'Hydro 需要在服务器上编译交互器，已跳过 config.yaml')
+        return '', {}, warnings
+
+    source_path = os.path.join(extract_dir, interactor.source.replace('/', os.sep))
+    if not os.path.isfile(source_path):
+        warnings.append(f'交互器源码 {interactor.source} 不在压缩包内，已跳过 config.yaml')
+        return '', {}, warnings
+
+    name = HYDRO_INTERACTOR_NAMES.get(interactor.language)
+    if not name:
+        warnings.append(f'无法识别交互器源码语言（{interactor.source}），'
+                        '已跳过 config.yaml（Hydro 的交互器只认 C / C++）')
+        return '', {}, warnings
+
+    with open(source_path, 'r', encoding='utf-8', errors='replace') as f:
+        code = f.read()
+
+    extra = collect_interactor_extra_files(extract_dir, interactor, code)
+    missing = [item for item in interactor_include_names(code) if item not in extra]
+    if missing:
+        warnings.append('交互器引用的头文件在包内找不到，服务器编译时可能失败：' + '、'.join(missing))
+    if log and extra:
+        log('交互器附带头文件：' + '、'.join(sorted(extra)))
+
+    lines = ['type: interactive', f'interactor: {name}']
+    if extra:
+        lines.append('judge_extra_files:')
+        for item in sorted(extra):
+            lines.append(f'  - {item}')
+    if time_limit_ms > 0:
+        lines.append(f'time: {time_limit_ms}ms')
+    if memory_limit_mb > 0:
+        lines.append(f'memory: {memory_limit_mb}m')
+    config = '\n'.join(lines) + '\n'
+
+    files: Dict[str, bytes] = {name: code.encode('utf-8')}
+    for item, content in extra.items():
+        files[item] = content.encode('utf-8')
+    return config, files, warnings
+
+
 def build_problem_md(info: dict, description: str) -> str:
     """构建 problem.md 文件内容"""
     time_ms = info['time_limit_ms']
@@ -310,6 +385,33 @@ def convert_to_hydro(polygon_zip: str, output_dir: str,
             with open(os.path.join(testdata_dir, f'{i}.out'), 'wb') as f:
                 f.write(out)
 
+        # 交互题：额外写 testdata/config.yaml 与交互器源码
+        extra_testdata_files: List[str] = []
+        interactor = detect_interactor(root)
+        if interactor is not None:
+            kind = '通信题（run-twice）' if interactor.is_communication else '交互题'
+            if progress_callback:
+                progress_callback(70, f'检测到{kind}，正在写入交互器配置...')
+            config_text, config_files, warns = build_hydro_interactive_config(
+                tmp_dir, interactor, info['time_limit_ms'],
+                info['memory_limit_bytes'] // (1024 * 1024),
+                log=lambda m: progress_callback(70, m) if progress_callback else None)
+            for message in warns:
+                if progress_callback:
+                    progress_callback(70, f'[警告] {message}')
+            if config_text:
+                with open(os.path.join(testdata_dir, 'config.yaml'), 'w',
+                          encoding='utf-8', newline='\n') as f:
+                    f.write(config_text)
+                extra_testdata_files.append('config.yaml')
+                for name, content in config_files.items():
+                    with open(os.path.join(testdata_dir, name), 'wb') as f:
+                        f.write(content)
+                    extra_testdata_files.append(name)
+                if progress_callback:
+                    progress_callback(70, '已写入 testdata/config.yaml（判题类型 interactive）'
+                                          + '，交互器：' + '、'.join(sorted(config_files)))
+
         if progress_callback:
             progress_callback(80, '正在打包为 ZIP...')
 
@@ -328,6 +430,11 @@ def convert_to_hydro(polygon_zip: str, output_dir: str,
                     zf.write(in_full, os.path.join(problem_dir_name, 'testdata', in_name))
                 if os.path.isfile(out_full):
                     zf.write(out_full, os.path.join(problem_dir_name, 'testdata', out_name))
+            # 添加交互题的 config.yaml / 交互器源码 / 附带头文件
+            for name in extra_testdata_files:
+                full = os.path.join(testdata_dir, name)
+                if os.path.isfile(full):
+                    zf.write(full, os.path.join(problem_dir_name, 'testdata', name))
 
         if progress_callback:
             progress_callback(100, f'转换完成! 输出: {zip_path}')

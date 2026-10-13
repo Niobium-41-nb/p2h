@@ -34,6 +34,12 @@ Polygon Codeforces → FPS (Fresh Problem Set) / Hydro / HOJ 格式转换工具
     生成命令（如 gen -T 10000 ...），需要运行包内生成器才能得到输入；所有测试点的
     答案也要靠主标程（solution tag="main"）算出来。转换时会自动复刻 Polygon 的
     doall 流程动态生成这些数据（优先用包内预编译二进制，缺失时用本机 g++ 编译源码）。
+
+    交互题 / 通信题（run-twice）：包里带交互器（<assets><interactor>）的题目会
+    自动识别判题模式并带上交互器源码 —— 转 HOJ 时导出 judgeMode=communication
+    （选手程序跑两次，Polygon 的通信题）或 interactive（跑一次），外加
+    problem.spjCode / judgeExtraFile（testlib.h 等头文件）；交互题的答案由交互器
+    判定，不会再跑主标程生成（.out 为空，HOJ 交互/通信判题不需要它）。
 """
 
 import sys
@@ -154,7 +160,8 @@ def run_hoj_cli(args):
     import argparse
     import datetime
     from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj, HojOptions,
-                                  AUTH_PUBLIC, HOJ_DIFFICULTIES, HOJ_DIFFICULTY_MAX)
+                                  AUTH_PUBLIC, HOJ_DIFFICULTIES, HOJ_DIFFICULTY_MAX,
+                                  JUDGE_MODE_AUTO, JUDGE_MODES)
 
     parser = argparse.ArgumentParser(
         prog='polygon2fps.py hoj',
@@ -175,6 +182,11 @@ def run_hoj_cli(args):
                              % (HOJ_DIFFICULTY_MAX, '、'.join(HOJ_DIFFICULTIES)))
     parser.add_argument('--judge-case-mode', default='default',
                         help='用例模式：default / ergodic_without_error / subtask_lowest / subtask_average')
+    parser.add_argument('--judge-mode', dest='judge_mode', default=JUDGE_MODE_AUTO,
+                        choices=JUDGE_MODES,
+                        help='判题模式（默认 auto）：auto 按 Polygon 包自动识别 —— '
+                             '包内有交互器且 run-count=2（通信题）→ communication，'
+                             '交互器只跑一次 → interactive，否则 default')
     parser.add_argument('--tags', default='', help='标签，逗号分隔')
     parser.add_argument('--problem-id', default='', help='题目展示 ID（默认使用 Polygon short-name）')
     parser.add_argument('--max-mb', type=float, default=0, help='测试数据大小上限（MB），0 = 不限制')
@@ -206,6 +218,7 @@ def run_hoj_cli(args):
         problem_id=ns.problem_id,
         max_test_data_mb=ns.max_mb,
         generate_tests=ns.generate_tests,
+        judge_mode=ns.judge_mode,
     )
 
     def log(stage, message):

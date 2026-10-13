@@ -19,7 +19,21 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from polygon2fps_core import convert as convert_to_fps
 from polygon2hydro_core import convert_to_hydro
 from polygon2hoj_core import (convert_to_hoj, convert_batch_to_hoj,
-                              HojOptions, HOJ_LANGUAGES, HOJ_DIFFICULTIES)
+                              HojOptions, HOJ_LANGUAGES, HOJ_DIFFICULTIES,
+                              JUDGE_MODE_AUTO)
+
+# 判题模式下拉框（值形如 'auto - 自动识别（交互题按包判断）'）
+JUDGE_MODE_CHOICES = [
+    f'{JUDGE_MODE_AUTO} - 自动识别（交互题按 Polygon 包判断）',
+    'default - 普通判题',
+    'interactive - 交互判题（选手程序跑一次）',
+    'communication - 通信判题（run-twice，Polygon 通信题）',
+]
+
+
+def _parse_judge_mode(value: str) -> str:
+    """从 'communication - 通信判题（…）' 这类下拉框取值中取出模式名"""
+    return (value or '').split('-', 1)[0].strip() or JUDGE_MODE_AUTO
 
 
 def _log_tag(stage, message: str) -> str:
@@ -62,6 +76,7 @@ class Polygon2FPSApp:
         self.hoj_type = tk.StringVar(value='0 - ACM')
         self.hoj_difficulty = tk.StringVar(value=HOJ_DIFFICULTIES[0])
         self.hoj_case_mode = tk.StringVar(value='default')
+        self.hoj_judge_mode = tk.StringVar(value=JUDGE_MODE_CHOICES[0])
         self.hoj_tags = tk.StringVar(value='')
         self.hoj_problem_id = tk.StringVar(value='')
         self.hoj_languages = tk.StringVar(value=', '.join(HOJ_LANGUAGES))
@@ -324,6 +339,15 @@ class Polygon2FPSApp:
             side=tk.LEFT, padx=(4, 4))
         ttk.Label(tail, text='MB（0 = 不限制）').pack(side=tk.LEFT)
 
+        # 第 6 行：判题模式（交互题 / 通信题会自动识别并带出交互器源码）
+        ttk.Label(parent, text='判题模式').grid(row=5, column=0, sticky=tk.W, padx=(0, 4), pady=(2, 0))
+        ttk.Combobox(parent, textvariable=self.hoj_judge_mode, state='readonly',
+                     values=list(JUDGE_MODE_CHOICES)).grid(
+            row=5, column=1, sticky=tk.EW, pady=(2, 0))
+        ttk.Label(parent, text='auto：交互题按 Polygon 包自动识别（communication / interactive）',
+                  foreground='gray', font=('微软雅黑', 8)).grid(
+            row=5, column=2, columnspan=2, sticky=tk.W, padx=(10, 0), pady=(2, 0))
+
     def _on_format_changed(self):
         """格式切换时的界面调整"""
         fmt = self.output_format.get()
@@ -542,6 +566,7 @@ class Polygon2FPSApp:
             self._log(f'题目权限: {self.hoj_auth.get()} | 类型: {self.hoj_type.get()}'
                       f' | 难度: {self.hoj_difficulty.get()}', 'info')
             self._log(f'用例模式: {self.hoj_case_mode.get()}'
+                      f' | 判题模式: {self.hoj_judge_mode.get()}'
                       f' | 作者: {hoj_options.author or "（由导入者决定）"}', 'info')
             if hoj_options.tags:
                 self._log(f'标签: {", ".join(hoj_options.tags)}', 'info')
@@ -580,6 +605,7 @@ class Polygon2FPSApp:
             languages=[l.strip() for l in self.hoj_languages.get().replace('，', ',').split(',') if l.strip()],
             problem_id=self.hoj_problem_id.get().strip(),
             max_test_data_mb=max_mb,
+            judge_mode=_parse_judge_mode(self.hoj_judge_mode.get()),
         )
 
     def _do_batch_convert(self, files: list, out_dir: str, fmt: str,

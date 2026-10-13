@@ -116,6 +116,7 @@ class LoadResult:
     generated_answers: int = 0
     validated: int = 0
     checked: int = 0
+    interactive: bool = False   # 交互题 / 通信题（答案由交互器判定，没有标准答案文件）
 
     def size_bytes(self) -> int:
         return sum(len(t.input) + len(t.answer) for t in self.tests)
@@ -123,6 +124,8 @@ class LoadResult:
     def summary(self) -> str:
         """生成一句人话摘要，用于日志/进度显示"""
         parts = [f'{len(self.tests)} 组测试数据']
+        if self.interactive:
+            parts.append('交互/通信题：答案留空（由交互器判定）')
         if self.generated_inputs:
             parts.append(f'动态生成输入 {self.generated_inputs} 组')
         if self.generated_answers:
@@ -254,6 +257,114 @@ def _elem_path(elem: Optional[ET.Element]) -> Optional[str]:
         return None
     path = elem.get('path')
     return path.strip() if path and path.strip() else None
+
+
+# ========== 交互题 / 通信题（run-twice） ==========
+
+# Polygon 交互器源码后缀 → HOJ 通信器语言名
+# （HOJ 只为 INTERACTIVE-C / INTERACTIVE-C++ 配了编译与运行环境，只认这两种）
+INTERACTOR_LANGUAGES = {
+    '.cpp': 'C++', '.cc': 'C++', '.cxx': 'C++', '.c++': 'C++',
+    '.c': 'C',
+}
+
+_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
+
+
+@dataclass
+class Interactor:
+    """Polygon 交互题 / 通信题的交互器信息（``<assets><interactor>``）
+
+    Polygon 的「通信题」= 交互题 + ``Run solutions twice``：选手程序对每个测试点
+    跑两次，两次之间由交互器把第二轮输入写进 ``tout``。这与 HOJ 的 communication
+    判题模式一一对应（HOJ 复用了 Polygon/testlib 交互器的 <inf> <tout> [<ans>] 约定）。
+    """
+    source: Optional[str] = None   # 相对包根目录的源码路径，如 files/interactor.cpp
+    binary: Optional[str] = None   # 相对包根目录的预编译二进制
+    language: str = ''             # 'C++' / 'C'（HOJ 只支持这两种）
+    run_count: int = 1             # <judging run-count>：选手程序每个测试点运行几次
+    runs: Tuple[int, ...] = ()     # 交互器被调用的轮次（<interactor><runs><run>）
+
+    @property
+    def is_communication(self) -> bool:
+        """要跑两次（Polygon 的 Run solutions twice）→ HOJ 的 communication 判题"""
+        return self.run_count >= 2
+
+    @property
+    def second_run_interactive(self) -> bool:
+        """第二轮是否也运行交互器（Polygon 的 Interactive second invocation）"""
+        return 2 in self.runs
+
+
+def detect_interactor(root: ET.Element) -> Optional[Interactor]:
+    """识别交互题 / 通信题：包内有 ``<assets><interactor>`` 即为交互题"""
+    node = root.find('.//assets/interactor')
+    if node is None:
+        return None
+    source = _elem_path(node.find('source'))
+    binary = _elem_path(node.find('binary'))
+    if not source and not binary:
+        return None
+
+    ext = os.path.splitext(source or binary or '')[1].lower()
+    runs = tuple(int(e.text.strip()) for e in node.findall('runs/run')
+                 if (e.text or '').strip().isdigit())
+
+    run_count = 1
+    judging = root.find('.//judging')
+    if judging is not None:
+        try:
+            run_count = int((judging.get('run-count') or '1').strip())
+        except ValueError:
+            run_count = 1
+
+    return Interactor(source=source, binary=binary,
+                      language=INTERACTOR_LANGUAGES.get(ext, ''),
+                      run_count=max(1, run_count), runs=runs)
+
+
+def interactor_include_names(source_text: str) -> List[str]:
+    """交互器源码里 ``#include "..."`` 引用的文件名（basename，去重保序）"""
+    names: List[str] = []
+    for include in _INCLUDE_RE.findall(source_text or ''):
+        name = os.path.basename(include.replace('\\', '/'))
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def collect_interactor_extra_files(extract_dir: str, interactor: Interactor,
+                                   source_text: str) -> Dict[str, str]:
+    """收集交互器源码 ``#include "..."`` 引用到的包内头文件
+
+    HOJ 编译交互/通信程序时不会把压缩包里的文件放进工作目录，必须用
+    ``judgeExtraFile`` 把 ``testlib.h`` 之类的头文件一起带过去，否则编译直接失败。
+
+    Returns:
+        {文件名: 文件内容}，键名只用 basename（HOJ 把它们平铺到工作目录）
+    """
+    files: Dict[str, str] = {}
+    if not source_text:
+        return files
+
+    search_dirs: List[str] = []
+    if interactor.source:
+        source_path = os.path.join(extract_dir, interactor.source.replace('/', os.sep))
+        search_dirs.append(os.path.dirname(source_path))
+    search_dirs.append(os.path.join(extract_dir, 'files'))
+    search_dirs.append(extract_dir)
+
+    for include in _INCLUDE_RE.findall(source_text):
+        name = os.path.basename(include.replace('\\', '/'))
+        if not name or name in files:
+            continue
+        for directory in search_dirs:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate):
+                with open(candidate, 'r', encoding='utf-8', errors='replace') as f:
+                    files[name] = f.read()
+                break
+    return files
 
 
 # ========== 可执行体解析 / 运行 ==========
@@ -619,7 +730,15 @@ def load_test_data(extract_dir: str, root: ET.Element, generate: bool = True,
     tools = collect_tools(root) if generate else {}
     runner = TestDataRunner(extract_dir, testset, tools, log) if generate else None
 
-    result = LoadResult(test_count=testset.test_count)
+    # 交互题 / 通信题的「答案」由交互器在评测时判定，包里没有、也跑不出来：
+    # 直接跑主标程只会拿到第一轮的输出（单跑还会停在等交互上），必须跳过这一步。
+    interactor = detect_interactor(root)
+    if interactor is not None:
+        kind = '通信题（run-twice）' if interactor.is_communication else '交互题'
+        log(f'检测到{kind}：答案由交互器判定，不运行主标程生成答案'
+            f'（交互器：{interactor.source or interactor.binary}）')
+
+    result = LoadResult(test_count=testset.test_count, interactive=interactor is not None)
     indices = test_indices(extract_dir, testset)
 
     def _read_static(path: str) -> Optional[bytes]:
@@ -661,9 +780,14 @@ def load_test_data(extract_dir: str, root: ET.Element, generate: bool = True,
             answer_data = _read_static(ans_rel)
             generated_answer = False
             if answer_data is None and runner is not None:
-                log(f'正在运行主标程计算第 {index} 个测试点的答案')
-                answer_data = runner.generate_answer(input_data)
-                generated_answer = answer_data is not None
+                if interactor is not None:
+                    # 交互/通信题：不跑主标程，答案留空
+                    # （Polygon 的 .a 对交互题本就没有意义，判定完全交给交互器）
+                    answer_data = b''
+                else:
+                    log(f'正在运行主标程计算第 {index} 个测试点的答案')
+                    answer_data = runner.generate_answer(input_data)
+                    generated_answer = answer_data is not None
             if answer_data is None:
                 _warn(f'第 {index} 个测试点缺少答案 {ans_rel}'
                       + ('，且无法通过主标程生成' if runner is not None else '，且未启用动态生成'))
@@ -685,11 +809,13 @@ def load_test_data(extract_dir: str, root: ET.Element, generate: bool = True,
                     result.validated += 1
                 else:
                     _warn(f'第 {index} 个测试点未通过 validator 校验：{message}')
-                ok, message = runner.check(input_data, answer_data)
-                if ok:
-                    result.checked += 1
-                else:
-                    _warn(f'第 {index} 个测试点未通过 checker 校验：{message}')
+                # 交互题的 checker 校验的是「第二轮运行的输出」，没有主标程就无从跑起
+                if interactor is None:
+                    ok, message = runner.check(input_data, answer_data)
+                    if ok:
+                        result.checked += 1
+                    else:
+                        _warn(f'第 {index} 个测试点未通过 checker 校验：{message}')
 
             used += size
             result.tests.append(TestData(

@@ -5,6 +5,9 @@ Polygon Codeforces → HOJ 格式核心转换模块
 
 参考 HOJ 官方文档《题目管理 / 导入题目》：
     https://docs.hdoi.cn/use/import-problem
+以及二次开发版的《题目导入包格式标准》与《判题模式》：
+    https://gitee.com/vanadium_23/hoj/blob/master/docs/docs/use/problem-package.md
+    https://gitee.com/vanadium_23/hoj/blob/master/docs/docs/use/judge-mode.md
 
 HOJ 导入包结构（zip 根目录下，**不能**再多套一层文件夹）：
 
@@ -18,6 +21,13 @@ HOJ 导入包结构（zip 根目录下，**不能**再多套一层文件夹）�
 
 题目 json 中 samples（评测点）的 input/output 指的是**测试数据文件夹内的文件名**，
 其余信息（标题、题面、时间/空间限制等）都在 problem 对象里。
+
+交互题 / 通信题（Polygon 的交互题与 run-twice「通信题」）还会额外写入：
+
+    judgeMode = interactive / communication
+    problem.spjLanguage = 'C' / 'C++'      # HOJ 只配了这两种交互/通信程序的语言
+    problem.spjCode = 交互器源码
+    judgeExtraFile = {'testlib.h': ...}    # 编译交互器需要的头文件
 """
 
 import os
@@ -30,7 +40,9 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Callable, Dict
 
-from polygon_tests import load_test_data, failure_message
+from polygon_tests import (load_test_data, failure_message, detect_interactor,
+                           collect_interactor_extra_files, interactor_include_names,
+                           Interactor)
 import polygon_statement
 
 
@@ -67,6 +79,17 @@ HOJ_DIFFICULTY_MAX = len(HOJ_DIFFICULTIES) - 1
 # 用例模式
 JUDGE_CASE_MODES = ["default", "ergodic_without_error", "subtask_lowest", "subtask_average"]
 
+# 判题模式（HOJ：default 普通 / spj 特殊 / interactive 交互 / communication 通信）
+# 转换时默认按 Polygon 包自动识别；也可在界面/命令行显式指定
+JUDGE_MODE_AUTO = 'auto'
+JUDGE_MODE_DEFAULT = 'default'
+JUDGE_MODE_INTERACTIVE = 'interactive'
+JUDGE_MODE_COMMUNICATION = 'communication'
+JUDGE_MODES = [JUDGE_MODE_AUTO, JUDGE_MODE_DEFAULT,
+               JUDGE_MODE_INTERACTIVE, JUDGE_MODE_COMMUNICATION]
+# 需要交互器源码的判题模式
+JUDGE_MODES_WITH_PROGRAM = (JUDGE_MODE_INTERACTIVE, JUDGE_MODE_COMMUNICATION)
+
 
 def normalize_difficulty(value) -> int:
     """把难度值收敛到合法范围（0~8），非法值回退为 0（暂无评定）"""
@@ -95,6 +118,7 @@ class HojOptions:
     problem_id: str = ''                  # 题目展示 ID（留空则交给 HOJ 导入时自动分配 P<id>）
     max_test_data_mb: float = 0           # 测试数据大小上限（MB），0 = 不限制
     generate_tests: bool = True           # 包内缺失的测试点是否现场动态生成（跑生成器 + 主标程）
+    judge_mode: str = JUDGE_MODE_AUTO     # 判题模式：auto 按包自动识别，也可强制 default/interactive/communication
 
     def normalized(self) -> 'HojOptions':
         """返回一个字段取值合法的副本"""
@@ -109,8 +133,43 @@ class HojOptions:
             problem_id=(self.problem_id or '').strip(),
             max_test_data_mb=self.max_test_data_mb if self.max_test_data_mb and self.max_test_data_mb > 0 else 0,
             generate_tests=bool(self.generate_tests),
+            judge_mode=self.judge_mode if self.judge_mode in JUDGE_MODES else JUDGE_MODE_AUTO,
         )
         return opts
+
+
+def resolve_judge_mode(options: 'HojOptions',
+                       interactor: Optional[Interactor]) -> Tuple[str, List[str]]:
+    """决定 HOJ 判题模式（返回 ``(模式, 警告列表)``）
+
+    * ``auto``（默认）：按 Polygon 包自动识别 ——
+      有交互器且 ``<judging run-count="2">``（Run solutions twice）→ ``communication``；
+      有交互器但只跑一次 → ``interactive``；没交互器 → ``default``。
+    * 显式指定时优先，但若拿不到交互器则退回 ``default`` 并给出警告。
+    """
+    forced = options.judge_mode if options.judge_mode in JUDGE_MODES else JUDGE_MODE_AUTO
+    warnings: List[str] = []
+
+    if forced == JUDGE_MODE_AUTO:
+        if interactor is None:
+            return JUDGE_MODE_DEFAULT, warnings
+        if not interactor.is_communication:
+            return JUDGE_MODE_INTERACTIVE, warnings
+        if not interactor.second_run_interactive:
+            warnings.append(
+                '该题在 Polygon 里关闭了 “Interactive second invocation”（交互器只在第一次运行调用）：'
+                '原本由 Polygon 的 checker 判定第二轮输出，而 HOJ 的 communication 判题以第二轮通信器的判定为准。'
+                '若通信器第二轮不给出判定（直接 _ok），该题会恒定 AC —— '
+                '建议在 Polygon 里开启该项后重新导出')
+        return JUDGE_MODE_COMMUNICATION, warnings
+
+    if forced in JUDGE_MODES_WITH_PROGRAM and interactor is None:
+        warnings.append(f'已指定 {forced} 判题，但包内没有交互器（<assets><interactor>），已按 default 处理')
+        return JUDGE_MODE_DEFAULT, warnings
+    if forced == JUDGE_MODE_DEFAULT and interactor is not None:
+        warnings.append('包内是交互题 / 通信题，但已指定 default 判题：交互器不会导出，'
+                        '导入后只能按普通模式比对（.out 为空）')
+    return forced, warnings
 
 
 # ========== 通用工具函数 ==========
@@ -339,8 +398,19 @@ def build_samples(tests: List[Tuple[bytes, bytes]], options: HojOptions) -> List
 
 
 def build_problem_json(info: dict, sections: Dict[str, str], examples_html: str,
-                       tests: List[Tuple[bytes, bytes]], options: HojOptions) -> dict:
-    """构建 HOJ 题目 json 对象"""
+                       tests: List[Tuple[bytes, bytes]], options: HojOptions,
+                       judge_mode: str = JUDGE_MODE_DEFAULT,
+                       interactor: Optional[Interactor] = None,
+                       interactor_code: str = '',
+                       judge_extra_files: Optional[Dict[str, str]] = None) -> dict:
+    """构建 HOJ 题目 json 对象
+
+    Args:
+        judge_mode: HOJ 判题模式（default / spj / interactive / communication）
+        interactor: 交互题 / 通信题的交互器信息（judge_mode 为 interactive/communication 时必给）
+        interactor_code: 交互器源码（写入 problem.spjCode）
+        judge_extra_files: 交互/特判程序的额外文件（如 testlib.h），写入顶层 judgeExtraFile
+    """
     problem = {
         'auth': options.auth,
         'isRemote': False,
@@ -375,9 +445,15 @@ def build_problem_json(info: dict, sections: Dict[str, str], examples_html: str,
     if options.author:
         problem['author'] = options.author
 
-    return {
-        # judgeMode: default 普通判题 / spj 特殊判题 / interactive 交互判题
-        'judgeMode': 'default',
+    # 交互题 / 通信题：交互器源码与语言写进 problem（HOJ 复用 spjCode / spjLanguage）
+    if judge_mode in JUDGE_MODES_WITH_PROGRAM:
+        problem['judgeMode'] = judge_mode
+        problem['spjLanguage'] = (interactor.language if interactor else '') or 'C++'
+        problem['spjCode'] = interactor_code
+
+    data = {
+        # judgeMode: default 普通判题 / spj 特殊判题 / interactive 交互判题 / communication 通信判题（run-twice）
+        'judgeMode': judge_mode,
         # 题目的可选语言
         'languages': list(options.languages),
         # 评测点（input/output 为测试数据文件夹内的文件名）
@@ -389,6 +465,45 @@ def build_problem_json(info: dict, sections: Dict[str, str], examples_html: str,
         # 代码模板（HOJ 导入时必须存在该字段，否则会解析失败）
         'codeTemplates': [],
     }
+    # 交互/特判程序的额外文件（testlib.h 等）：HOJ 编译交互器时不会带上包内文件
+    if judge_extra_files:
+        data['judgeExtraFile'] = dict(judge_extra_files)
+    return data
+
+
+def _load_interactor(extract_dir: str, interactor: Optional[Interactor],
+                     log: Optional[Callable[[str], None]] = None
+                     ) -> Tuple[str, Dict[str, str]]:
+    """读取交互器源码及其依赖的包内头文件
+
+    Returns:
+        (交互器源码, {文件名: 内容})，后者写入 HOJ 导入包的顶层 ``judgeExtraFile``
+
+    Raises:
+        ValueError: 没有源码 / 源码缺失 / 语言不是 HOJ 支持的 C、C++
+    """
+    if interactor is None:
+        raise ValueError('压缩包内没有交互器（<assets><interactor>），无法按交互/通信判题导出')
+    if not interactor.source:
+        raise ValueError(
+            f"压缩包里只有交互器的预编译二进制（{interactor.binary or '?'}）、没有源码："
+            'HOJ 需要在后台编译交互/通信程序，请改用带源码的 Polygon 导出包（Linux / Windows 包）')
+
+    path = os.path.join(extract_dir, interactor.source.replace('/', os.sep))
+    if not os.path.isfile(path):
+        raise ValueError(f'交互器源码 {interactor.source} 不在压缩包内')
+    if not interactor.language:
+        raise ValueError(f'无法识别交互器源码语言（{interactor.source}）：'
+                         'HOJ 的交互判题与通信判题只支持 C / C++')
+
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        code = f.read()
+
+    extra = collect_interactor_extra_files(extract_dir, interactor, code)
+    missing = [name for name in interactor_include_names(code) if name not in extra]
+    if missing and log:
+        log('[警告] 交互器引用的头文件在包内找不到，HOJ 编译时可能失败：' + '、'.join(missing))
+    return code, extra
 
 
 def _build_problem_data(polygon_zip: str, options: HojOptions,
@@ -427,6 +542,25 @@ def _build_problem_data(polygon_zip: str, options: HojOptions,
         sections = build_hoj_sections(tmp_dir, root, lang)
         examples = get_examples(tmp_dir, lang)
 
+        report(0.55, '正在识别判题模式...')
+        interactor = detect_interactor(root)
+        judge_mode, mode_warnings = resolve_judge_mode(options, interactor)
+        for message in mode_warnings:
+            warnings.append(message)
+            report(0.55, f'[警告] {message}')
+
+        interactor_code = ''
+        judge_extra_files: Dict[str, str] = {}
+        if judge_mode in JUDGE_MODES_WITH_PROGRAM:
+            interactor_code, judge_extra_files = _load_interactor(
+                tmp_dir, interactor,
+                log=lambda m: report(0.55, m))
+            kind = '通信题（run-twice）' if judge_mode == JUDGE_MODE_COMMUNICATION else '交互题'
+            report(0.55, f'检测到{kind}：判题模式 {judge_mode}，'
+                         f'交互器语言 {interactor.language}')
+            if judge_extra_files:
+                report(0.55, '交互器附带头文件：' + '、'.join(sorted(judge_extra_files)))
+
         report(0.65, '正在准备测试数据...')
 
         # 生成过程的日志（含警告）由 log 回调输出，warn 只负责把警告收集进 stat
@@ -438,7 +572,10 @@ def _build_problem_data(polygon_zip: str, options: HojOptions,
             raise ValueError('未在压缩包中找到任何测试数据')
 
         report(0.8, '正在生成题目数据...')
-        data = build_problem_json(info, sections, build_examples_html(examples), tests, options)
+        data = build_problem_json(info, sections, build_examples_html(examples), tests,
+                                  options, judge_mode=judge_mode, interactor=interactor,
+                                  interactor_code=interactor_code,
+                                  judge_extra_files=judge_extra_files)
 
         files: List[Tuple[str, bytes]] = []
         for i, (in_data, out_data) in enumerate(tests, start=1):
@@ -452,6 +589,9 @@ def _build_problem_data(polygon_zip: str, options: HojOptions,
             'tests': len(tests),
             'samples': len(examples),
             'warnings': warnings,
+            'judge_mode': judge_mode,
+            'interactive': interactor is not None,
+            'interactor_language': interactor.language if interactor else '',
         }
         report(1.0, f'解析完成（{len(tests)} 组测试数据）')
         return data, files, stat

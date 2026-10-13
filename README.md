@@ -6,12 +6,12 @@
 
 ### 开箱即用（Windows，无需装 Python）
 
-到 [Releases](https://github.com/Niobium-41-nb/p2h/releases) 下载：
+到 [Releases](https://github.com/Niobium-41-nb/p2h/releases) 或仓库 [`dist/`](https://github.com/Niobium-41-nb/p2h/tree/main/dist) 目录下载：
 
 | 文件 | 用途 |
 |------|------|
-| `Polygon2FPS-v1.0.0.exe` | **图形界面版**，双击即用（无控制台窗口） |
-| `Polygon2FPS-CLI-v1.0.0.exe` | 命令行版，用法同 `python polygon2fps.py <fps|hydro|hoj> ...` |
+| `Polygon2FPS-v1.2.0.exe` | **图形界面版**，双击即用（无控制台窗口） |
+| `Polygon2FPS-CLI-v1.2.0.exe` | 命令行版，用法同 `python polygon2fps.py <fps|hydro|hoj> ...` |
 
 > 两个 exe 都是单文件绿色版（约 11.5 MB），首次启动会自解压到临时目录，稍等一下。
 > 动态生成测试数据需要本机有 C++ 编译器（`g++`），仅当包里缺失生成型测试点数据时才会用到；
@@ -57,6 +57,7 @@ HOJ 子命令参数：
 | `--type` | 题目类型：`acm`（默认）/ `oi`（自动为每个测试点分配 100 分总分） |
 | `--difficulty` | 难度：`0`~`8`（默认 `0`），见下方难度对照表 |
 | `--judge-case-mode` | 用例模式：`default`（默认）/ `ergodic_without_error` / `subtask_lowest` / `subtask_average` |
+| `--judge-mode` | 判题模式：`auto`（默认，按 Polygon 包自动识别）/ `default` / `interactive` / `communication` |
 | `--tags` | 标签，逗号分隔 |
 | `--problem-id` | 题目展示 ID（默认留空，由 HOJ 导入时自动分配 `P<id>`） |
 | `--max-mb` | 测试数据大小上限（MB），`0` = 不限制 |
@@ -66,7 +67,7 @@ HOJ 子命令参数：
 
 ```bash
 pip install pyinstaller
-python build_exe.py                  # 同时打包 GUI 版与 CLI 版（版本号默认 1.0.0）
+python build_exe.py                  # 同时打包 GUI 版与 CLI 版（版本号默认 1.2.0）
 python build_exe.py --version 1.2.3  # 指定版本号（写进文件名）
 python build_exe.py --cli-only       # 只要命令行版
 ```
@@ -148,6 +149,58 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 > 提示：生成型测试点可能很大（例如 `n=200000` 的测试点单组数据可达数 MB），
 > 转换时间与输出体积都会明显上升，必要时用 `--max-mb` 限制。
 
+## 交互题 / 通信题（run-twice）
+
+Polygon 的**通信题**（`General Info → Advanced → Run solutions twice`）在导出包里的标志是
+`<judging run-count="2">` 加一个 `<assets><interactor>`：选手程序对每个测试点跑两次，
+两次之间由**交互器**把第二轮输入写进 `tout`。
+
+这正好就是 [HOJ 的 communication 判题模式](https://gitee.com/vanadium_23/hoj/blob/master/docs/docs/use/judge-mode.md)：
+HOJ 复用交互程序的编译配置，命令行约定也与 Polygon / testlib 交互器完全一致
+（`<可执行文件> <inf> <tout> [<ans>]`，第一轮的 `tout` 即第二轮的 `inf`），
+所以 Polygon 的交互器可以**原样**当作 HOJ 的通信器使用。
+
+### 自动识别（`--judge-mode auto`，默认）
+
+| Polygon 包里的情况 | 导出到 HOJ |
+|--------------------|-----------|
+| 有 `<assets><interactor>` 且 `<judging run-count="2">` | `judgeMode = communication`（选手程序跑两次） |
+| 有 `<assets><interactor>` 且 `run-count="1"` | `judgeMode = interactive`（选手程序跑一次） |
+| 没有 `<assets><interactor>` | `judgeMode = default` |
+
+也可以显式指定（GUI「判题模式」/`--judge-mode`）：显式指定 `interactive`/`communication`
+但包内没有交互器时会退回 `default` 并给出警告；显式指定 `default` 时会忽略包内的交互器
+（同样给出警告，交互器不会被导出）。
+
+### 导出了什么
+
+除常规字段外，HOJ 包还会写入：
+
+| 字段 | 内容 |
+|------|------|
+| `judgeMode`（顶层 + `problem.judgeMode`） | `interactive` / `communication` |
+| `problem.spjLanguage` | `C` / `C++`（HOJ 只为这两种语言配了 `INTERACTIVE-*` 编译环境） |
+| `problem.spjCode` | 交互器源码（`<assets><interactor><source>`） |
+| `judgeExtraFile` | 交互器 `#include "..."` 用到的包内头文件（如 `testlib.h`） |
+| 每个测试点的 `.out` | **空文件**：交互/通信判题的结论由交互器给出，HOJ 不需要标准答案 |
+
+因为答案由交互器判定，交互题**不会**再跑主标程去生成 `.out`（Polygon 的 `.a` 对交互题
+本来就没有意义，单跑主标程还会停在等交互上）；`validator` 仍会照常校验生成的输入。
+
+### 注意事项
+
+* **Polygon 关闭了 “Interactive second invocation”**（`<interactor>` 里没有 `<runs>`）：
+  这种包在 Polygon 里是「交互器只跑第一轮 + checker 判第二轮」，而 HOJ 的通信判题
+  **以第二轮通信器的判定为准**。若通信器第二轮不给出判定（直接 `_ok`），该题会恒定 AC ——
+  转换时会打印警告，建议在 Polygon 里开启该项后重新导出。
+* **交互器必须是 C / C++**：HOJ 只配置了 `INTERACTIVE-C` / `INTERACTIVE-C++`；
+  其它语言或「只有预编译二进制、没有源码」的包会直接报错（HOJ 需要源码在服务器上编译）。
+* **FPS 格式不支持交互/通信题**（FPS 没有对应字段），转 FPS 时会打印警告，
+  交互器不会被打包，导入后只能按普通模式比对。
+* **Hydro 格式只支持「跑一次」的交互题**：会额外写出 `testdata/config.yaml`
+  （`type: interactive` + `interactor: interactor.cc`）与交互器源码、`testlib.h`；
+  run-twice 的通信题 Hydro 无法表达，会跳过 `config.yaml` 并给出警告（请改用 HOJ 格式）。
+
 ## 项目结构
 
 ```
@@ -155,11 +208,12 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 ├── polygon2fps_core.py         # FPS 核心转换逻辑
 ├── polygon2fps_gui.py          # 图形用户界面（基于 tkinter）
 ├── polygon2hydro_core.py       # Hydro 核心转换逻辑
-├── polygon2hoj_core.py         # HOJ 核心转换逻辑
+├── polygon2hoj_core.py         # HOJ 核心转换逻辑（含通信/交互判题）
 ├── polygon_statement.py        # LaTeX 题面 → Markdown / 纯文本（三个 core 共用）
-├── polygon_tests.py            # 测试数据加载 / 动态生成（三个 core 共用）
+├── polygon_tests.py            # 测试数据加载 / 动态生成 / 交互器识别（三个 core 共用）
 ├── polygon_statement_tests.py  # 题面转换回归测试（python polygon_statement_tests.py）
 ├── polygon2hoj_core_tests.py   # HOJ 展示 ID 等回归测试（python polygon2hoj_core_tests.py）
+├── polygon_interactive_tests.py # 交互题 / 通信题转换回归测试（python polygon_interactive_tests.py）
 ├── build_exe.py                # 一键打包为 Windows exe（PyInstaller）
 ├── README.md                   # 本文件
 └── .gitignore
@@ -173,6 +227,9 @@ Polygon 里的测试数据**不是静态上传的**，导出包中往往没有�
 - ✅ **图形界面** — 文件列表管理、进度条、日志输出，操作直观
 - ✅ **命令行支持** — 适合批量处理或集成到脚本
 - ✅ **完整转换** — 题目名称、描述、输入/输出格式、样例、测试数据
+- ✅ **交互题 / 通信题** — 自动识别 Polygon 的交互题与 run-twice 通信题：HOJ 导出
+  `judgeMode=communication/interactive` + 交互器源码（`spjCode`）与 `testlib.h`（`judgeExtraFile`）；
+  Hydro 导出 `testdata/config.yaml` + 交互器源码；FPS 会提示不支持
 - ✅ **测试数据动态生成** — 包内缺失的生成型测试点会用生成器 + 主标程现场生成（同 Polygon 的 doall）
 - ✅ **LaTeX 处理** — 数学公式原样保留给 KaTeX 渲染，正文 LaTeX 命令转为 Markdown；
   段落内的软换行折叠为空格（LaTeX 语义），避免 HOJ / Hydro 前端 `breaks:true` 把
@@ -242,13 +299,14 @@ JSON 字段映射：
 | `problem.memoryLimit` | 空间限制 (MB) | `problem.xml` → `<memory-limit>`（限 1~1024） |
 | `samples` | 评测点（含 OI 分数） | `tests/` 目录（缺失时现场生成） |
 | `samples[].input/output` | 测试数据文件夹内的文件名 | 自动生成 `1.in` / `1.out` |
-| `languages` / `tags` / `judgeMode` 等 | 判题配置 | 界面选项或默认值 |
+| `languages` / `tags` / `judgeMode` 等 | 判题配置 | 界面选项或默认值（交互题 / 通信题会自动识别，见上文） |
 
 > **注意**：
 > - 测试数据按原始字节写入（保留结尾空格与换行），保证判题结果与 Polygon 一致。
 > - 包内缺失的测试数据（生成型测试点的输入、所有测试点的答案）会自动动态生成，详见上文“测试数据：动态生成”。
 > - HOJ 的 `codeTemplates` 字段虽然可为空，但必须存在，否则 HOJ 解析 json 会报错；本工具已固定输出该字段。
-> - Polygon 的判题器（checker）不会被转换为 HOJ 的 SPJ 代码，导出的题目判题模式固定为 `default`（普通判题）。
+> - Polygon 的判题器（checker）不会被转换为 HOJ 的 SPJ 代码：普通题导出为 `default`，
+>   交互题 / 通信题导出为 `interactive` / `communication`（交互器源码写在 `problem.spjCode`）。
 > - 题解代码（solution）和教程（tutorial）**不会**被转换到输出中（三种格式均如此）。
 
 ## 依赖

@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 from typing import Optional, List, Tuple
 
-from polygon_tests import (load_test_data, failure_message)
+from polygon_tests import (load_test_data, failure_message, detect_interactor)
 import polygon_statement
 
 
@@ -229,6 +229,12 @@ def build_fps_xml(root: ET.Element, extract_dir: str,
                                 log=log, generate_tests=generate_tests)
     if log:
         log(test_result.summary())
+        interactor = detect_interactor(root)
+        if interactor is not None:
+            kind = '通信题（run-twice）' if interactor.is_communication else '交互题'
+            log(f'[警告] 这是 Polygon 的{kind}，但 FPS 格式没有交互器/通信器字段，'
+                f'交互器（{interactor.source or interactor.binary}）不会被打包；'
+                '导入后判题会按普通模式比对（空输出），请改用 HOJ 格式导出')
 
     # 样例：优先用题面里的 example.*，缺失时回退到标记为 sample 的测试点
     samples = get_samples(extract_dir, 'chinese')
